@@ -71,7 +71,32 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
    - 将 `SwishMini.app` 拖入 `/Applications` 文件夹
    - 双击打开应用
 
-3. **授予权限** ⚠️ **重要步骤**
+3. **处理安全提示** 🔐
+
+   由于 SwishMini 未经过 Apple 公证，首次打开时可能会看到提示：
+
+   > "Apple 无法验证 'SwishMini' 是否包含可能危害 Mac 安全或泄漏隐私的恶意软件。"
+
+   **解决方法（选择其一）：**
+
+   **方法一：右键打开（推荐）**
+   - 在 Finder 中找到 `SwishMini.app`
+   - 按住 `Control` 键点击（或右键点击）应用图标
+   - 选择"打开"
+   - 在弹出的对话框中点击"打开"
+
+   **方法二：系统设置允许**
+   - 尝试打开应用后，前往 `系统设置 > 隐私与安全性`
+   - 滚动到底部，找到关于 SwishMini 被阻止的提示
+   - 点击"仍要打开"
+
+   **方法三：终端命令（高级用户）**
+   ```bash
+   xattr -cr /Applications/SwishMini.app
+   ```
+   然后正常双击打开应用。
+
+4. **授予权限** ⚠️ **重要步骤**
 
    首次运行时，系统会提示授予 **辅助功能权限**：
 
@@ -80,7 +105,7 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
    - 勾选 `SwishMini` 旁边的复选框
    - 重启应用使权限生效
 
-4. **验证安装**
+5. **验证安装**
 
    打开任意窗口（如 Safari、Finder），在窗口标题栏区域尝试：
    - 双指张开 → 窗口应进入全屏
@@ -333,7 +358,32 @@ SwishMini brings intuitive trackpad gesture control to macOS, making window mana
    - Drag `SwishMini.app` to the `/Applications` folder
    - Double-click to open the app
 
-3. **Grant Permissions** ⚠️ **Important Step**
+3. **Handle Security Warning** 🔐
+
+   Since SwishMini is not notarized by Apple, you may see a warning on first launch:
+
+   > "Apple could not verify 'SwishMini' is free of malware that may harm your Mac or compromise your privacy."
+
+   **Solutions (choose one):**
+
+   **Method 1: Right-Click to Open (Recommended)**
+   - Find `SwishMini.app` in Finder
+   - Hold `Control` and click (or right-click) the app icon
+   - Select "Open"
+   - Click "Open" in the dialog that appears
+
+   **Method 2: Allow in System Settings**
+   - After attempting to open the app, go to `System Settings > Privacy & Security`
+   - Scroll to the bottom and find the message about SwishMini being blocked
+   - Click "Open Anyway"
+
+   **Method 3: Terminal Command (Advanced Users)**
+   ```bash
+   xattr -cr /Applications/SwishMini.app
+   ```
+   Then double-click to open the app normally.
+
+4. **Grant Permissions** ⚠️ **Important Step**
 
    On first launch, the system will prompt for **Accessibility permission**:
 
@@ -342,7 +392,7 @@ SwishMini brings intuitive trackpad gesture control to macOS, making window mana
    - Check the checkbox next to `SwishMini`
    - Restart the app for permissions to take effect
 
-4. **Verify Installation**
+5. **Verify Installation**
 
    Open any window (e.g., Safari, Finder) and try these gestures over the window title bar:
    - Two-finger pinch open → Window should go fullscreen
