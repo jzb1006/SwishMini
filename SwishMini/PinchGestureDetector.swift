@@ -46,6 +46,9 @@ class PinchGestureDetector {
     var onGestureDetected: ((TitleBarGestureType) -> Void)?
     var onPinchChanged: ((CGFloat) -> Void)?
     var onPinchEnded: ((CGFloat) -> Void)?
+
+    /// 手势反馈回调 - 用于 HUD 显示
+    var onGestureFeedback: ((GestureFeedback) -> Void)?
     
     // 手势阈值（增加死区，减少误触发）
     private let pinchOpenThreshold: Float = 1.5      // 张开阈值（从1.4提高）
@@ -166,7 +169,76 @@ class PinchGestureDetector {
     }
     
     // MARK: - 核心处理逻辑
-    
+
+    /// 分类手势类型并计算进度
+    private func classifyGesture(
+        scale: CGFloat,
+        yDelta: CGFloat,
+        useActionThresholds: Bool
+    ) -> (candidate: GestureCandidate, progress: CGFloat) {
+        let absY = abs(yDelta)
+        let scaleDeviation = abs(scale - 1.0)
+
+        // 实时反馈使用更低的阈值，便于更早显示 HUD
+        let hintYThreshold: CGFloat = 0.02
+        let hintScaleThreshold: CGFloat = 0.05
+
+        let yDominantThreshold = useActionThresholds ? CGFloat(yDeltaThreshold) : hintYThreshold
+        let scaleDominantThreshold = useActionThresholds ? CGFloat(scaleDeviationThreshold) : hintScaleThreshold
+
+        // 主导手势判断逻辑
+        let isSwipeDominant = absY > yDominantThreshold && absY > (scaleDeviation * 2.0)
+        let isPinchDominant = scaleDeviation > scaleDominantThreshold && !isSwipeDominant
+
+        if isSwipeDominant {
+            if yDelta < 0 {
+                let denom = max(CGFloat(swipeDownThreshold), 0.0001)
+                return (.swipeDown, min(absY / denom, 1))
+            } else {
+                let denom = max(CGFloat(swipeUpThreshold), 0.0001)
+                return (.swipeUp, min(absY / denom, 1))
+            }
+        }
+
+        if isPinchDominant {
+            if scale >= 1 {
+                let denom = max(CGFloat(pinchOpenThreshold) - 1.0, 0.0001)
+                return (.pinchOpen, min((scale - 1.0) / denom, 1))
+            } else {
+                let denom = max(1.0 - CGFloat(pinchCloseThreshold), 0.0001)
+                return (.pinchClose, min((1.0 - scale) / denom, 1))
+            }
+        }
+
+        return (.none, 0)
+    }
+
+    /// 发送手势反馈事件
+    private func emitFeedback(
+        phase: GesturePhase,
+        scale: CGFloat,
+        yDelta: CGFloat,
+        isInValidRegion: Bool,
+        mouseLocation: CGPoint,
+        useActionThresholds: Bool
+    ) {
+        let classified = classifyGesture(scale: scale, yDelta: yDelta, useActionThresholds: useActionThresholds)
+        let windowFrame = WindowManager.shared.getWindowUnderMouse(mouseLocation)?.frame
+
+        onGestureFeedback?(
+            GestureFeedback(
+                phase: phase,
+                candidate: classified.candidate,
+                progress: classified.progress,
+                scale: scale,
+                yDelta: yDelta,
+                isInValidRegion: isInValidRegion,
+                mouseLocation: mouseLocation,
+                windowFrame: windowFrame
+            )
+        )
+    }
+
     func handleTouchCallback(data: UnsafePointer<mtTouch>?, count: Int32) {
         // 确保数据有效
         guard let touches = data, count > 0 else {
@@ -192,6 +264,7 @@ class PinchGestureDetector {
         
         // 检查是否在标题栏区域
         let isOnTitleBar = WindowManager.shared.isPointOnTitleBar(mouseLocation)
+        let isInValidRegionForFeedback = isOnTitleBar || isNearMinimizedLocation
         
         // 如果不在标题栏，且也不在最小化恢复位置附近，则忽略手势
         if !isOnTitleBar && !isNearMinimizedLocation {
@@ -240,6 +313,16 @@ class PinchGestureDetector {
             gestureStartY = avgY
             previousY = avgY
             print("✋ [Gesture] 手势开始 - 初始距离: \(String(format: "%.4f", distance)), Y: \(String(format: "%.3f", avgY))")
+
+            // 发送手势开始反馈
+            emitFeedback(
+                phase: .began,
+                scale: 1.0,
+                yDelta: 0.0,
+                isInValidRegion: isInValidRegionForFeedback,
+                mouseLocation: mouseLocation,
+                useActionThresholds: false
+            )
         } else {
             // 计算变化
             let distanceDelta = distance - previousDistance
@@ -262,7 +345,17 @@ class PinchGestureDetector {
                 
                 onPinchChanged?(CGFloat(currentScale))
             }
-            
+
+            // 发送手势进行中反馈
+            emitFeedback(
+                phase: .changed,
+                scale: CGFloat(currentScale),
+                yDelta: CGFloat(yDelta),
+                isInValidRegion: isInValidRegionForFeedback,
+                mouseLocation: mouseLocation,
+                useActionThresholds: false
+            )
+
             previousDistance = distance
             previousY = avgY
         }
@@ -275,7 +368,17 @@ class PinchGestureDetector {
         let totalYDelta = previousY - gestureStartY  // 正值=向上，负值=向下
         
         print("✅ [Gesture] 手势结束 - scale: \(String(format: "%.2f", finalScale)), yDelta: \(String(format: "%.3f", totalYDelta))")
-        
+
+        // 发送手势结束反馈
+        emitFeedback(
+            phase: .ended,
+            scale: CGFloat(finalScale),
+            yDelta: CGFloat(totalYDelta),
+            isInValidRegion: true,
+            mouseLocation: NSEvent.mouseLocation,
+            useActionThresholds: true
+        )
+
         // === 主导手势类型判断 ===
         // 计算各维度的绝对变化量
         let absYDelta = abs(totalYDelta)

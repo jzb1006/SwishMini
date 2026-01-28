@@ -64,17 +64,39 @@ class WindowManager {
     
     /// 检查鼠标是否在窗口标题栏区域
     func isPointOnTitleBar(_ point: CGPoint) -> Bool {
+        guard let mainScreen = NSScreen.screens.first else { return false }
+        let screenHeight = mainScreen.frame.height
+
+        // 全屏检测：鼠标在屏幕顶部边缘（用于触发全屏标题栏）
+        let screenTopEdge: CGFloat = 6  // 顶部 6 像素触发区域
+        if point.y >= screenHeight - screenTopEdge {
+            // 检查当前窗口是否全屏
+            if let (window, _) = getWindowUnderMouse(point), isWindowFullScreen(window) {
+                return true
+            }
+        }
+
+        // 普通窗口标题栏检测
         guard let (_, frame) = getWindowUnderMouse(point) else {
             return false
         }
-        
-        guard let mainScreen = NSScreen.screens.first else { return false }
-        let screenPoint = CGPoint(x: point.x, y: mainScreen.frame.height - point.y)
-        
+
+        let screenPoint = CGPoint(x: point.x, y: screenHeight - point.y)
+
         let titleBarHeight: CGFloat = 30.0
         let titleBarRect = CGRect(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: titleBarHeight)
-        
+
         return titleBarRect.contains(screenPoint)
+    }
+
+    /// 检查窗口是否处于全屏状态
+    func isWindowFullScreen(_ window: AXUIElement) -> Bool {
+        var fullScreenValue: AnyObject?
+        if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreenValue) == .success,
+           let isFullScreen = fullScreenValue as? Bool {
+            return isFullScreen
+        }
+        return false
     }
     
     // MARK: - 窗口信息
