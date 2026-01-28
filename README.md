@@ -5,7 +5,7 @@
 **通过触控板手势控制任意 macOS 窗口**
 **Control Any macOS Window with Trackpad Gestures**
 
-[![Version](https://img.shields.io/badge/version-1.0-blue.svg)](https://github.com/yourusername/SwishMini/releases)
+[![Version](https://img.shields.io/badge/version-1.1-blue.svg)](https://github.com/jzb1006/SwishMini/releases/tag/v1.1)
 [![macOS](https://img.shields.io/badge/macOS-26.1%2B-brightgreen.svg)](https://www.apple.com/macos/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Swift](https://img.shields.io/badge/Swift-5.0-orange.svg)](https://swift.org)
@@ -74,9 +74,8 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
 ### 下载安装
 
 1. **下载应用**
-   ```
-   [待发布] - 后续将提供 GitHub Releases 下载链接
-   ```
+
+   [👉 点击前往 GitHub Releases 下载](https://github.com/jzb1006/SwishMini/releases/tag/v1.1)
 
 2. **安装步骤**
    - 解压下载的 ZIP 文件
@@ -291,8 +290,8 @@ SwishMini 严格遵守用户隐私：
 ## 📧 联系方式
 
 - **作者**：江志彬
-- **问题反馈**：[GitHub Issues](https://github.com/yourusername/SwishMini/issues)
-- **功能建议**：[GitHub Discussions](https://github.com/yourusername/SwishMini/discussions)
+- **问题反馈**：[GitHub Issues](https://github.com/jzb1006/SwishMini/issues)
+- **功能建议**：[GitHub Discussions](https://github.com/jzb1006/SwishMini/discussions)
 
 ---
 
@@ -373,9 +372,8 @@ Real-time visual feedback is displayed when performing gestures:
 ### Download & Installation
 
 1. **Download the App**
-   ```
-   [To be released] - GitHub Releases download link will be provided
-   ```
+
+   [👉 Download from GitHub Releases](https://github.com/jzb1006/SwishMini/releases/tag/v1.1)
 
 2. **Installation Steps**
    - Unzip the downloaded ZIP file
@@ -590,8 +588,8 @@ Thanks to the following projects and resources for inspiration:
 ## 📧 Contact
 
 - **Author**: 江志彬 (Jiang Zhibin)
-- **Bug Reports**: [GitHub Issues](https://github.com/yourusername/SwishMini/issues)
-- **Feature Requests**: [GitHub Discussions](https://github.com/yourusername/SwishMini/discussions)
+- **Bug Reports**: [GitHub Issues](https://github.com/jzb1006/SwishMini/issues)
+- **Feature Requests**: [GitHub Discussions](https://github.com/jzb1006/SwishMini/discussions)
 
 ---
 
