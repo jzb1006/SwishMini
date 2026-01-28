@@ -24,7 +24,8 @@
 >
 > 建议录制以下场景：
 > - 双指张开手势 → 窗口全屏
-> - 双指捏合手势 → 窗口还原
+> - 双指捏合手势 → 窗口还原（全屏时）
+> - 长按捏合 2秒 → 关闭窗口（非全屏时，带环形进度条）
 > - 双指下滑手势 → 窗口最小化
 > - 双指上滑手势 → 恢复最小化窗口
 
@@ -33,6 +34,7 @@
 - ✅ 即时的窗口响应
 - ✅ 支持任意应用窗口
 - ✅ Chrome 浏览器特别优化
+- ✅ 实时 HUD 视觉反馈（环形进度条 + 颜色渐变）
 
 ---
 
@@ -45,9 +47,19 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
 | 手势 | 动作 | 说明 |
 |------|------|------|
 | 👐 **双指张开** | 全屏 | 将当前窗口切换至全屏模式 |
-| 🤏 **双指捏合** | 还原 | 退出全屏或还原到标准大小 |
+| 🤏 **双指捏合** | 还原 | 全屏时退出全屏 |
+| 🤏 **长按捏合 2秒** | 关闭窗口 | 非全屏时长按捏合关闭当前窗口 |
 | 👇 **双指下滑** | 最小化 | 最小化当前窗口到 Dock |
 | 👆 **双指上滑** | 取消最小化 | 在原位置恢复最小化的窗口 |
+
+### 🎯 HUD 视觉反馈
+
+执行手势时，屏幕会显示实时视觉反馈：
+
+- **环形进度条**：长按关闭窗口时显示倒计时进度环
+- **颜色渐变**：从橙色平滑过渡到红色，表示紧迫程度
+- **进度百分比**：实时显示当前进度（如 50%、75%）
+- **取消提示**：松手或张开手指时显示"已取消"
 
 ### 🌐 特别支持
 
@@ -311,7 +323,8 @@ Made with ❤️ by 江志彬
 >
 > Suggested scenarios to record:
 > - Two-finger pinch open → Window goes fullscreen
-> - Two-finger pinch close → Window restores
+> - Two-finger pinch close → Window restores (when fullscreen)
+> - Long press pinch 2s → Close window (when not fullscreen, with progress ring)
 > - Two-finger swipe down → Window minimizes
 > - Two-finger swipe up → Restore minimized window
 
@@ -320,6 +333,7 @@ Made with ❤️ by 江志彬
 - ✅ Instant window response
 - ✅ Works with any application window
 - ✅ Special optimization for Chrome browser
+- ✅ Real-time HUD visual feedback (progress ring + color gradient)
 
 ---
 
@@ -332,9 +346,19 @@ SwishMini brings intuitive trackpad gesture control to macOS, making window mana
 | Gesture | Action | Description |
 |---------|--------|-------------|
 | 👐 **Two-Finger Pinch Open** | Fullscreen | Switch current window to fullscreen mode |
-| 🤏 **Two-Finger Pinch Close** | Restore | Exit fullscreen or restore to standard size |
+| 🤏 **Two-Finger Pinch Close** | Restore | Exit fullscreen (when in fullscreen) |
+| 🤏 **Long Press Pinch 2s** | Close Window | Close current window (when not fullscreen) |
 | 👇 **Two-Finger Swipe Down** | Minimize | Minimize current window to Dock |
 | 👆 **Two-Finger Swipe Up** | Unminimize | Restore minimized window at original location |
+
+### 🎯 HUD Visual Feedback
+
+Real-time visual feedback is displayed when performing gestures:
+
+- **Progress Ring**: Shows countdown progress when long-pressing to close window
+- **Color Gradient**: Smoothly transitions from orange to red, indicating urgency
+- **Progress Percentage**: Displays current progress in real-time (e.g., 50%, 75%)
+- **Cancel Indicator**: Shows "Cancelled" when releasing or spreading fingers
 
 ### 🌐 Special Support
 
