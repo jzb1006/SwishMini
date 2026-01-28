@@ -25,7 +25,7 @@
 > 建议录制以下场景：
 > - 双指张开手势 → 窗口全屏
 > - 双指捏合手势 → 窗口还原（全屏时）
-> - 长按捏合 2秒 → 关闭窗口（非全屏时，带环形进度条）
+> - 上滑 1秒 → 关闭窗口（非全屏时，带环形进度条）
 > - 双指下滑手势 → 窗口最小化
 > - 双指上滑手势 → 恢复最小化窗口
 
@@ -48,7 +48,7 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
 |------|------|------|
 | 👐 **双指张开** | 全屏 | 将当前窗口切换至全屏模式 |
 | 🤏 **双指捏合** | 还原 | 全屏时退出全屏 |
-| 🤏 **长按捏合 2秒** | 关闭窗口 | 非全屏时长按捏合关闭当前窗口 |
+| 👆 **上滑 1秒** | 关闭窗口 | 非全屏时上滑 1 秒关闭当前窗口 |
 | 👇 **双指下滑** | 最小化 | 最小化当前窗口到 Dock |
 | 👆 **双指上滑** | 取消最小化 | 在原位置恢复最小化的窗口 |
 
@@ -56,10 +56,10 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
 
 执行手势时，屏幕会显示实时视觉反馈：
 
-- **环形进度条**：长按关闭窗口时显示倒计时进度环
+- **环形进度条**：上滑关闭窗口时显示倒计时进度环
 - **颜色渐变**：从橙色平滑过渡到红色，表示紧迫程度
 - **进度百分比**：实时显示当前进度（如 50%、75%）
-- **取消提示**：松手或张开手指时显示"已取消"
+- **取消提示**：松手或收回手指时显示"已取消"
 
 ### 🌐 特别支持
 
@@ -324,7 +324,7 @@ Made with ❤️ by 江志彬
 > Suggested scenarios to record:
 > - Two-finger pinch open → Window goes fullscreen
 > - Two-finger pinch close → Window restores (when fullscreen)
-> - Long press pinch 2s → Close window (when not fullscreen, with progress ring)
+> - Swipe up 1s → Close window (when not fullscreen, with progress ring)
 > - Two-finger swipe down → Window minimizes
 > - Two-finger swipe up → Restore minimized window
 
@@ -347,7 +347,7 @@ SwishMini brings intuitive trackpad gesture control to macOS, making window mana
 |---------|--------|-------------|
 | 👐 **Two-Finger Pinch Open** | Fullscreen | Switch current window to fullscreen mode |
 | 🤏 **Two-Finger Pinch Close** | Restore | Exit fullscreen (when in fullscreen) |
-| 🤏 **Long Press Pinch 2s** | Close Window | Close current window (when not fullscreen) |
+| 👆 **Swipe Up 1s** | Close Window | Close current window (when not fullscreen) |
 | 👇 **Two-Finger Swipe Down** | Minimize | Minimize current window to Dock |
 | 👆 **Two-Finger Swipe Up** | Unminimize | Restore minimized window at original location |
 
@@ -355,10 +355,10 @@ SwishMini brings intuitive trackpad gesture control to macOS, making window mana
 
 Real-time visual feedback is displayed when performing gestures:
 
-- **Progress Ring**: Shows countdown progress when long-pressing to close window
+- **Progress Ring**: Shows countdown progress when swiping up to close window
 - **Color Gradient**: Smoothly transitions from orange to red, indicating urgency
 - **Progress Percentage**: Displays current progress in real-time (e.g., 50%, 75%)
-- **Cancel Indicator**: Shows "Cancelled" when releasing or spreading fingers
+- **Cancel Indicator**: Shows "Cancelled" when releasing or retracting fingers
 
 ### 🌐 Special Support
 

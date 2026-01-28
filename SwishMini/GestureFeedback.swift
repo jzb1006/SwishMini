@@ -32,9 +32,9 @@ enum GestureCandidate: Equatable {
     case pinchOpen
     /// 双指捏合 -> 还原（全屏时退出全屏）
     case pinchClose
-    /// 非全屏 + 长按捏合 -> 关闭窗口
+    /// 非全屏 + 上滑持续 1 秒 -> 关闭窗口
     case closeWindow
-    /// 已取消（未完成长按捏合就松手/张开手指）
+    /// 已取消（上滑关闭未完成就松手）
     case cancelled
     /// 双指下滑 -> 最小化
     case swipeDown
@@ -47,7 +47,7 @@ enum GestureCandidate: Equatable {
         case .none:        return "macwindow"
         case .pinchOpen:   return "arrow.up.left.and.arrow.down.right"
         case .pinchClose:  return "arrow.down.right.and.arrow.up.left"
-        case .closeWindow: return "xmark.circle"
+        case .closeWindow: return "arrow.up.circle.fill"  // 上滑关闭
         case .cancelled:   return "xmark.circle"
         case .swipeDown:   return "arrow.down.circle"
         case .swipeUp:     return "arrow.up.circle"
@@ -60,7 +60,7 @@ enum GestureCandidate: Equatable {
         case .none:        return "标题栏区域"
         case .pinchOpen:   return "双指张开"
         case .pinchClose:  return "双指捏合"
-        case .closeWindow: return "长按捏合"
+        case .closeWindow: return "上滑关闭"
         case .cancelled:   return "已取消"
         case .swipeDown:   return "双指下滑"
         case .swipeUp:     return "双指上滑"

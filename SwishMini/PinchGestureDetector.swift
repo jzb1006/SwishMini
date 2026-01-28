@@ -40,9 +40,9 @@ class PinchGestureDetector {
     private var gestureStartY: Float = 0
     private var previousY: Float = 0
 
-    // 非全屏捏合关闭窗口的持续时间阈值（秒）
-    private let nonFullScreenPinchCloseHoldThreshold: TimeInterval = 2.0
-    
+    // 非全屏上滑关闭窗口的持续时间阈值（秒）
+    private let nonFullScreenSwipeUpCloseThreshold: TimeInterval = 1.0
+
     // 框架引用
     private var frameworkHandle: UnsafeMutableRawPointer?
     private var deviceList: [UnsafeMutableRawPointer] = []
@@ -202,6 +202,11 @@ class PinchGestureDetector {
                 let denom = max(CGFloat(swipeDownThreshold), 0.0001)
                 return (.swipeDown, min(absY / denom, 1))
             } else {
+                // 上滑：非全屏时显示"关闭窗口"提示（使用时间进度驱动 HUD 动画）
+                if !isWindowFullScreen {
+                    let holdProgress = min(gestureDuration / nonFullScreenSwipeUpCloseThreshold, 1)
+                    return (.closeWindow, holdProgress)
+                }
                 let denom = max(CGFloat(swipeUpThreshold), 0.0001)
                 return (.swipeUp, min(absY / denom, 1))
             }
@@ -212,11 +217,6 @@ class PinchGestureDetector {
                 let denom = max(CGFloat(pinchOpenThreshold) - 1.0, 0.0001)
                 return (.pinchOpen, min((scale - 1.0) / denom, 1))
             } else {
-                // 捏合：非全屏时显示"关闭窗口"提示（使用时间进度驱动 HUD 动画）
-                if !isWindowFullScreen {
-                    let holdProgress = min(gestureDuration / nonFullScreenPinchCloseHoldThreshold, 1)
-                    return (.closeWindow, holdProgress)
-                }
                 let denom = max(1.0 - CGFloat(pinchCloseThreshold), 0.0001)
                 return (.pinchClose, min((1.0 - scale) / denom, 1))
             }
@@ -240,7 +240,7 @@ class PinchGestureDetector {
         let windowFrame = windowInfo?.frame
         let isWindowFullScreen = windowInfo.map { WindowManager.shared.isWindowFullScreen($0.window) } ?? false
 
-        let classified: (candidate: GestureCandidate, progress: CGFloat)
+        var classified: (candidate: GestureCandidate, progress: CGFloat)
         if let override = override {
             classified = override
         } else {
@@ -251,6 +251,19 @@ class PinchGestureDetector {
                 isWindowFullScreen: isWindowFullScreen,
                 gestureDuration: gestureDuration
             )
+        }
+
+        // 修正：如果有可恢复的最小化窗口且鼠标在恢复热点附近，
+        // 上滑应优先显示为"取消最小化"，避免 HUD 错误地显示"关闭窗口"进度环
+        if classified.candidate == .closeWindow, let record = lastMinimizedWindow {
+            let dx = mouseLocation.x - record.location.x
+            let dy = mouseLocation.y - record.location.y
+            let distance = sqrt(dx * dx + dy * dy)
+            if distance <= restoreProximityThreshold {
+                let absY = abs(yDelta)
+                let denom = max(CGFloat(swipeUpThreshold), 0.0001)
+                classified = (.swipeUp, min(absY / denom, 1))
+            }
         }
 
         // 记录：一旦进入"关闭窗口"提示状态
@@ -442,11 +455,13 @@ class PinchGestureDetector {
         let willPinchOpen = hasValidWindow && isPinchGestureDominant && finalScale > pinchOpenThreshold
         let willPinchClose = hasValidWindow && isPinchGestureDominant && finalScale < pinchCloseThreshold
 
-        // 预判是否会执行关闭窗口操作（非全屏 + 捏合 + 达到阈值 + 持续时间足够 + 有效窗口）
+        // 预判是否会执行关闭窗口操作（非全屏 + 上滑主导 + 达到阈值 + 持续时间足够 + 有效窗口）
         let willCloseWindow = hasValidWindow &&
                               !isWindowFullScreen &&
-                              willPinchClose &&
-                              gestureDuration >= nonFullScreenPinchCloseHoldThreshold
+                              isSwipeGestureDominant &&
+                              totalYDelta > swipeUpThreshold &&
+                              gestureDuration >= nonFullScreenSwipeUpCloseThreshold &&
+                              !willSwipeUp  // 若命中"恢复最小化"则不应关闭窗口
 
         // 预判是否会执行全屏还原操作（全屏 + 捏合）
         let willRestoreFromFullScreen = hasValidWindow && isWindowFullScreen && willPinchClose
@@ -529,7 +544,10 @@ class PinchGestureDetector {
 
         switch gesture {
         case .swipeUp:
-            // 双指上滑 -> 取消最小化
+            // 双指上滑：
+            // 1. 优先恢复最小化窗口（如果有记录且在原位置附近）
+            // 2. 否则，非全屏 + 持续 >= 1 秒：关闭窗口
+            // 3. 全屏时：无动作（或后续扩展为其他功能）
             if let record = lastMinimizedWindow {
                 // 检查是否在原来的位置附近
                 let dx = mouseLocation.x - record.location.x
@@ -540,11 +558,22 @@ class PinchGestureDetector {
                     print("✅ [Action] 在原位置附近上滑，恢复窗口 (距离: \(String(format: "%.0f", distance))px)")
                     WindowManager.shared.unminimizeWindow(record.windowElement)
                     lastMinimizedWindow = nil  // 清除记录
-                } else {
-                    print("⚠️ [Action] 上滑位置距离历史位置过远 (\(String(format: "%.0f", distance))px > \(restoreProximityThreshold)px)")
+                    return
                 }
+                print("⚠️ [Action] 上滑位置距离历史位置过远 (\(String(format: "%.0f", distance))px > \(restoreProximityThreshold)px)")
+            }
+
+            // 未触发恢复（可能没有记录，或不在恢复热点），检查是否应该关闭窗口
+            guard let (window, _) = WindowManager.shared.getWindowUnderMouse(mouseLocation) else {
+                print("⚠️ [Action] 无法获取当前窗口")
+                return
+            }
+
+            if !WindowManager.shared.isWindowFullScreen(window) && gestureDuration >= nonFullScreenSwipeUpCloseThreshold {
+                print("❌ [Action] 非全屏 + 长上滑(\(String(format: "%.1f", gestureDuration))s >= \(nonFullScreenSwipeUpCloseThreshold)s)，关闭窗口")
+                WindowManager.shared.closeWindow(window)
             } else {
-                print("⚠️ [Action] 没有记录的最小化窗口")
+                print("ℹ️ [Action] 上滑但不满足关闭条件")
             }
             return
 
@@ -566,16 +595,12 @@ class PinchGestureDetector {
         case .pinchClose:
             // 双指捏合：
             // - 全屏状态：退出全屏
-            // - 非全屏 + 持续>=2秒：关闭窗口
-            // - 非全屏 + 持续<2秒：无动作
+            // - 非全屏：无动作
             if WindowManager.shared.isWindowFullScreen(window) {
                 print("🔄 [Action] 全屏状态，退出全屏")
                 WindowManager.shared.restoreWindow(window)
-            } else if gestureDuration >= nonFullScreenPinchCloseHoldThreshold {
-                print("❌ [Action] 非全屏 + 长捏合(\(String(format: "%.1f", gestureDuration))s >= \(nonFullScreenPinchCloseHoldThreshold)s)，关闭窗口")
-                WindowManager.shared.closeWindow(window)
             } else {
-                print("ℹ️ [Action] 非全屏 + 短捏合(\(String(format: "%.1f", gestureDuration))s < \(nonFullScreenPinchCloseHoldThreshold)s)，无动作")
+                print("ℹ️ [Action] 非全屏状态，捏合无动作")
             }
 
         case .swipeDown:

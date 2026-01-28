@@ -1,3 +1,6 @@
 /.npm-cache/
 /.idea/
 /.claude/
+
+# Xcode user-specific files
+*.xcuserstate

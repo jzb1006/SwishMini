@@ -22,16 +22,20 @@ class WindowManager {
         guard let mainScreen = NSScreen.screens.first else { return nil }
         let mainScreenHeight = mainScreen.frame.height
         let screenPoint = CGPoint(x: mouseLocation.x, y: mainScreenHeight - mouseLocation.y)
-        
+
+        // 排除自身进程的窗口（如 HUD 浮层），防止 HUD 干扰窗口检测导致抖动
+        let selfPID = getpid()
+
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
-        
+
         for windowInfo in windowList {
             guard let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
                   let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
                   let layer = windowInfo[kCGWindowLayer as String] as? Int,
-                  layer >= 0 && layer < 25 else {
+                  layer >= 0 && layer < 25,
+                  ownerPID != selfPID else {  // 忽略 SwishMini 自身的窗口
                 continue
             }
             
@@ -67,17 +71,20 @@ class WindowManager {
         guard let mainScreen = NSScreen.screens.first else { return false }
         let screenHeight = mainScreen.frame.height
 
+        // 单次查询窗口信息，确保结果一致性
+        let windowInfo = getWindowUnderMouse(point)
+
         // 全屏检测：鼠标在屏幕顶部边缘（用于触发全屏标题栏）
         let screenTopEdge: CGFloat = 6  // 顶部 6 像素触发区域
         if point.y >= screenHeight - screenTopEdge {
             // 检查当前窗口是否全屏
-            if let (window, _) = getWindowUnderMouse(point), isWindowFullScreen(window) {
+            if let window = windowInfo?.window, isWindowFullScreen(window) {
                 return true
             }
         }
 
         // 普通窗口标题栏检测
-        guard let (_, frame) = getWindowUnderMouse(point) else {
+        guard let frame = windowInfo?.frame else {
             return false
         }
 
@@ -90,15 +97,65 @@ class WindowManager {
     }
 
     /// 检查窗口是否处于全屏状态
+    /// - Note: 对 Chrome 进行特殊处理，因为 Chrome 使用键盘快捷键进入的"演示模式"全屏
+    ///         不会设置 AXFullScreen 属性，需要通过窗口尺寸判断
     func isWindowFullScreen(_ window: AXUIElement) -> Bool {
+        // 方法1: 检查标准的 AXFullScreen 属性
         var fullScreenValue: AnyObject?
         if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreenValue) == .success,
-           let isFullScreen = fullScreenValue as? Bool {
-            return isFullScreen
+           let isFullScreen = fullScreenValue as? Bool, isFullScreen {
+            return true
         }
+
+        // 方法2: 对 Chrome 进行视觉全屏检测
+        // Chrome 使用 ⌘+Ctrl+F 进入的全屏不会设置 AXFullScreen 属性
+        if isChrome(window) {
+            return isWindowVisuallyFullScreen(window)
+        }
+
         return false
     }
-    
+
+    /// 检查窗口是否"视觉上全屏"（覆盖整个屏幕，包括菜单栏区域）
+    /// - Note: 用于检测 Chrome 等不设置 AXFullScreen 属性的应用
+    private func isWindowVisuallyFullScreen(_ window: AXUIElement) -> Bool {
+        guard let windowFrame = getWindowFrame(window) else {
+            return false
+        }
+
+        // 找到窗口所在的屏幕（而非主屏幕）
+        let windowCenter = CGPoint(
+            x: windowFrame.origin.x + windowFrame.width / 2,
+            y: windowFrame.origin.y + windowFrame.height / 2
+        )
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(windowCenter) }) ?? NSScreen.main else {
+            return false
+        }
+
+        let screenFrame = screen.frame
+
+        // 严格的全屏检测：窗口必须覆盖整个屏幕（包括菜单栏）
+        // Chrome 演示模式全屏特征：
+        // 1. 窗口 y 坐标接近 0（屏幕顶部）
+        // 2. 窗口 x 坐标接近屏幕左边界
+        // 3. 窗口宽度等于屏幕宽度
+        // 4. 窗口高度等于屏幕高度（真全屏覆盖菜单栏）
+        let tolerance: CGFloat = 2.0  // 收紧容差，减少误判
+
+        let isAtScreenOrigin = abs(windowFrame.origin.x - screenFrame.origin.x) <= tolerance &&
+                               abs(windowFrame.origin.y - screenFrame.origin.y) <= tolerance
+        let isFullWidth = abs(windowFrame.width - screenFrame.width) <= tolerance
+        let isFullHeight = abs(windowFrame.height - screenFrame.height) <= tolerance  // 必须覆盖菜单栏
+
+        let isVisuallyFullScreen = isAtScreenOrigin && isFullWidth && isFullHeight
+
+        if isVisuallyFullScreen {
+            print("🔍 [WindowManager] Chrome 视觉全屏检测: 窗口覆盖整个屏幕 (screen: \(screenFrame), window: \(windowFrame))")
+        }
+
+        return isVisuallyFullScreen
+    }
+
     // MARK: - 窗口信息
     
     private func getWindowFrame(_ window: AXUIElement) -> CGRect? {
