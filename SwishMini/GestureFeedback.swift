@@ -30,8 +30,12 @@ enum GestureCandidate: Equatable {
     case none
     /// 双指张开 -> 全屏
     case pinchOpen
-    /// 双指捏合 -> 还原
+    /// 双指捏合 -> 还原（全屏时退出全屏）
     case pinchClose
+    /// 非全屏 + 长按捏合 -> 关闭窗口
+    case closeWindow
+    /// 已取消（未完成长按捏合就松手/张开手指）
+    case cancelled
     /// 双指下滑 -> 最小化
     case swipeDown
     /// 双指上滑 -> 取消最小化
@@ -43,6 +47,8 @@ enum GestureCandidate: Equatable {
         case .none:        return "macwindow"
         case .pinchOpen:   return "arrow.up.left.and.arrow.down.right"
         case .pinchClose:  return "arrow.down.right.and.arrow.up.left"
+        case .closeWindow: return "xmark.circle"
+        case .cancelled:   return "xmark.circle"
         case .swipeDown:   return "arrow.down.circle"
         case .swipeUp:     return "arrow.up.circle"
         }
@@ -54,6 +60,8 @@ enum GestureCandidate: Equatable {
         case .none:        return "标题栏区域"
         case .pinchOpen:   return "双指张开"
         case .pinchClose:  return "双指捏合"
+        case .closeWindow: return "长按捏合"
+        case .cancelled:   return "已取消"
         case .swipeDown:   return "双指下滑"
         case .swipeUp:     return "双指上滑"
         }
@@ -65,6 +73,8 @@ enum GestureCandidate: Equatable {
         case .none:        return "双指手势进行中"
         case .pinchOpen:   return "全屏"
         case .pinchClose:  return "还原"
+        case .closeWindow: return "松手关闭窗口"
+        case .cancelled:   return "未执行操作"
         case .swipeDown:   return "最小化"
         case .swipeUp:     return "取消最小化"
         }
@@ -90,6 +100,9 @@ struct GestureFeedback: Equatable {
     /// Y 轴位移（相对于手势开始时，正值=向上，负值=向下）
     let yDelta: CGFloat
 
+    /// 手势持续时间（秒）
+    let gestureDuration: TimeInterval
+
     /// 是否在有效区域内（标题栏或最小化恢复热点）
     let isInValidRegion: Bool
 
@@ -108,6 +121,7 @@ struct GestureFeedback: Equatable {
         progress: CGFloat,
         scale: CGFloat,
         yDelta: CGFloat,
+        gestureDuration: TimeInterval = 0,
         isInValidRegion: Bool,
         mouseLocation: CGPoint,
         windowFrame: CGRect? = nil,
@@ -118,6 +132,7 @@ struct GestureFeedback: Equatable {
         self.progress = max(0, min(progress, 1))  // 钳制到 0~1
         self.scale = scale
         self.yDelta = yDelta
+        self.gestureDuration = gestureDuration
         self.isInValidRegion = isInValidRegion
         self.mouseLocation = mouseLocation
         self.windowFrame = windowFrame

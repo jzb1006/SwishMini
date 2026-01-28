@@ -229,32 +229,16 @@ class WindowManager {
         return true
     }
     
-    /// 还原窗口（退出全屏或恢复到标准大小）
+    /// 还原窗口（仅在全屏状态下退出全屏；非全屏不执行，避免触发 Zoom 等副作用）
     @discardableResult
     func restoreWindow(_ window: AXUIElement) -> Bool {
-        // Chrome 兼容性：优先使用键盘快捷键
-        if isChrome(window) {
-            print("🌐 [WindowManager] 检测到 Chrome，使用键盘快捷键还原窗口")
-            return toggleFullScreenViaKeyboard()
+        // 仅处理全屏退出：非全屏不执行，避免 Zoom/快捷键误触发全屏等副作用
+        guard isWindowFullScreen(window) else {
+            print("ℹ️ [WindowManager] 当前窗口非全屏，忽略还原请求")
+            return false
         }
-        
-        // 先检查是否处于全屏状态
-        var fullScreenValue: AnyObject?
-        if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreenValue) == .success,
-           let isFullScreen = fullScreenValue as? Bool, isFullScreen {
-            // 如果是全屏状态，退出全屏
-            print("🔄 [WindowManager] 退出全屏模式")
-            return toggleFullScreen(window)
-        }
-        
-        // 否则使用 Zoom 按钮还原到标准大小
-        var zoomButton: AnyObject?
-        if AXUIElementCopyAttributeValue(window, kAXZoomButtonAttribute as CFString, &zoomButton) == .success {
-            print("🔄 [WindowManager] 点击 Zoom 按钮还原窗口")
-            return AXUIElementPerformAction(zoomButton as! AXUIElement, kAXPressAction as CFString) == .success
-        }
-        
-        print("⚠️ [WindowManager] 无法还原窗口")
-        return false
+
+        print("🔄 [WindowManager] 退出全屏模式")
+        return toggleFullScreen(window)
     }
 }

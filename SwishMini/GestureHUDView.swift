@@ -22,6 +22,10 @@ private enum HUDViewLayout {
     static let spacing: CGFloat = 12
     static let textSpacing: CGFloat = 2
     static let borderOpacity: Double = 0.18
+
+    // 环形进度条配置
+    static let progressRingSize: CGFloat = 40
+    static let progressRingLineWidth: CGFloat = 3
 }
 
 // MARK: - ViewModel
@@ -60,16 +64,42 @@ final class GestureHUDViewModel: ObservableObject {
 struct GestureHUDView: View {
     @ObservedObject var viewModel: GestureHUDViewModel
 
+    /// 是否显示关闭窗口的倒计时进度
+    private var showCloseWindowProgress: Bool {
+        viewModel.candidate == .closeWindow
+    }
+
     /// 图标缩放效果
     private var iconScale: CGFloat {
         switch viewModel.candidate {
         case .pinchOpen, .pinchClose:
             return 1.0 + (0.25 * viewModel.progress)
+        case .closeWindow:
+            // 关闭窗口时图标缩放更明显
+            return 1.0 + (0.15 * viewModel.progress)
         case .swipeDown, .swipeUp:
             return 1.0 + (0.15 * viewModel.progress)
-        case .none:
+        case .none, .cancelled:
             return 1.0
         }
+    }
+
+    /// 进度条颜色（从橙色平滑渐变到红色）
+    private var progressColor: Color {
+        // 使用线性插值实现平滑颜色渐变
+        // 橙色 (1.0, 0.6, 0.0) → 红色 (1.0, 0.2, 0.2)
+        let progress = viewModel.progress
+        let green = 0.6 - (0.4 * progress)   // 0.6 → 0.2
+        let blue = 0.2 * progress            // 0.0 → 0.2
+        return Color(red: 1.0, green: green, blue: blue)
+    }
+
+    /// 图标颜色
+    private var iconColor: Color {
+        if showCloseWindowProgress {
+            return progressColor
+        }
+        return Color.primary
     }
 
     var body: some View {
@@ -84,21 +114,52 @@ struct GestureHUDView: View {
 
             // 内容
             HStack(spacing: HUDViewLayout.spacing) {
-                // 图标
-                Image(systemName: viewModel.candidate.symbolName)
-                    .font(.system(size: HUDViewLayout.iconSize, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                    .scaleEffect(iconScale)
+                // 图标区域（可能带环形进度条）
+                ZStack {
+                    // 环形进度条背景（仅关闭窗口时显示）
+                    if showCloseWindowProgress {
+                        Circle()
+                            .stroke(Color.gray.opacity(0.3), lineWidth: HUDViewLayout.progressRingLineWidth)
+                            .frame(width: HUDViewLayout.progressRingSize, height: HUDViewLayout.progressRingSize)
+
+                        // 环形进度条
+                        Circle()
+                            .trim(from: 0, to: viewModel.progress)
+                            .stroke(
+                                progressColor,
+                                style: StrokeStyle(
+                                    lineWidth: HUDViewLayout.progressRingLineWidth,
+                                    lineCap: .round
+                                )
+                            )
+                            .frame(width: HUDViewLayout.progressRingSize, height: HUDViewLayout.progressRingSize)
+                            .rotationEffect(.degrees(-90))  // 从顶部开始
+                    }
+
+                    // 图标
+                    Image(systemName: viewModel.candidate.symbolName)
+                        .font(.system(size: HUDViewLayout.iconSize, weight: .semibold))
+                        .foregroundStyle(iconColor)
+                        .scaleEffect(iconScale)
+                }
+                .frame(width: HUDViewLayout.progressRingSize, height: HUDViewLayout.progressRingSize)
 
                 // 文字
                 VStack(alignment: .leading, spacing: HUDViewLayout.textSpacing) {
                     Text(viewModel.candidate.title)
                         .font(.system(size: HUDViewLayout.titleFontSize, weight: .semibold))
-                        .foregroundStyle(Color.primary)
+                        .foregroundStyle(showCloseWindowProgress ? progressColor : Color.primary)
 
-                    Text(viewModel.candidate.actionDescription)
-                        .font(.system(size: HUDViewLayout.subtitleFontSize, weight: .regular))
-                        .foregroundStyle(Color.secondary)
+                    // 副标题：关闭窗口时显示进度百分比
+                    if showCloseWindowProgress {
+                        Text("\(Int(viewModel.progress * 100))%")
+                            .font(.system(size: HUDViewLayout.subtitleFontSize, weight: .medium).monospacedDigit())
+                            .foregroundStyle(progressColor)
+                    } else {
+                        Text(viewModel.candidate.actionDescription)
+                            .font(.system(size: HUDViewLayout.subtitleFontSize, weight: .regular))
+                            .foregroundStyle(Color.secondary)
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -169,6 +230,63 @@ struct VisualEffectBackground: NSViewRepresentable {
                 progress: 0.6,
                 scale: 1.0,
                 yDelta: -0.1,
+                isInValidRegion: true,
+                mouseLocation: .zero
+            ))
+        }
+        return vm
+    }())
+    .padding(20)
+}
+
+#Preview("关闭窗口 - 50%") {
+    GestureHUDView(viewModel: {
+        let vm = GestureHUDViewModel()
+        Task { @MainActor in
+            vm.apply(GestureFeedback(
+                phase: .changed,
+                candidate: .closeWindow,
+                progress: 0.5,
+                scale: 0.7,
+                yDelta: 0,
+                isInValidRegion: true,
+                mouseLocation: .zero
+            ))
+        }
+        return vm
+    }())
+    .padding(20)
+}
+
+#Preview("关闭窗口 - 90%") {
+    GestureHUDView(viewModel: {
+        let vm = GestureHUDViewModel()
+        Task { @MainActor in
+            vm.apply(GestureFeedback(
+                phase: .changed,
+                candidate: .closeWindow,
+                progress: 0.9,
+                scale: 0.6,
+                yDelta: 0,
+                isInValidRegion: true,
+                mouseLocation: .zero
+            ))
+        }
+        return vm
+    }())
+    .padding(20)
+}
+
+#Preview("已取消") {
+    GestureHUDView(viewModel: {
+        let vm = GestureHUDViewModel()
+        Task { @MainActor in
+            vm.apply(GestureFeedback(
+                phase: .ended,
+                candidate: .cancelled,
+                progress: 1.0,
+                scale: 0.8,
+                yDelta: 0,
                 isInValidRegion: true,
                 mouseLocation: .zero
             ))
