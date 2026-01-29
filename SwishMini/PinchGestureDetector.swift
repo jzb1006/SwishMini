@@ -85,62 +85,52 @@ class PinchGestureDetector {
     
     func startMonitoring() {
         if isMonitoring { return }
-        
-        print("🔧 [PinchGestureDetector] 正在尝试加载 MultitouchSupport...")
-        
+
         // 1. 加载框架
         guard let handle = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_NOW) else {
-            print("❌ [PinchGestureDetector] 无法 dlopen 加载 MultitouchSupport 框架")
             return
         }
         frameworkHandle = handle
-        print("✅ [PinchGestureDetector] 框架加载成功")
-        
+
         // 2. 解析函数符号
         let MTDeviceCreateListPtr = dlsym(handle, "MTDeviceCreateList")
         let MTRegisterContactFrameCallbackPtr = dlsym(handle, "MTRegisterContactFrameCallback")
         let MTDeviceStartPtr = dlsym(handle, "MTDeviceStart")
-        
+
         if MTDeviceCreateListPtr == nil || MTRegisterContactFrameCallbackPtr == nil || MTDeviceStartPtr == nil {
-            print("❌ [PinchGestureDetector] 无法解析必要的 MT 函数符号")
             return
         }
-        
+
         // 3. 定义函数类型并转换
         typealias MTDeviceCreateListFunc = @convention(c) () -> CFArray?
         typealias MTRegisterCallbackFunc = @convention(c) (UnsafeMutableRawPointer, UnsafeMutableRawPointer) -> Void
         typealias MTDeviceStartFunc = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
-        
+
         let MTDeviceCreateList = unsafeBitCast(MTDeviceCreateListPtr, to: MTDeviceCreateListFunc.self)
         let MTRegisterContactFrameCallback = unsafeBitCast(MTRegisterContactFrameCallbackPtr, to: MTRegisterCallbackFunc.self)
         let MTDeviceStart = unsafeBitCast(MTDeviceStartPtr, to: MTDeviceStartFunc.self)
-        
+
         // 4. 获取设备列表
         guard let devicesRef = MTDeviceCreateList() else {
-             print("❌ [PinchGestureDetector] MTDeviceCreateList 返回 nil")
              return
         }
-        
+
         let count = CFArrayGetCount(devicesRef)
         var devices: [UnsafeMutableRawPointer] = []
-        print("✅ [PinchGestureDetector] 原始设备列表包含 \(count) 个项目")
-        
+
         for i in 0..<count {
             if let ptr = CFArrayGetValueAtIndex(devicesRef, i) {
                 let mutablePtr = UnsafeMutableRawPointer(mutating: ptr)
                 devices.append(mutablePtr)
             }
         }
-        
-        print("✅ [PinchGestureDetector] 解析出 \(devices.count) 个触控设备")
-        
+
         if devices.isEmpty {
-            print("⚠️ [PinchGestureDetector] 没有找到触控板设备，无法监控")
             return
         }
-        
+
         deviceList = devices
-        
+
         // 5. 注册回调并启动
         // 使用 Bridging Header 中定义的 mtTouch 结构体
         typealias MTContactCallbackFunc = @convention(c) (
@@ -150,18 +140,16 @@ class PinchGestureDetector {
             Double,                           // timestamp
             Int32                             // frame
         ) -> Void
-        
+
         typealias MTRegisterCallbackFuncTyped = @convention(c) (UnsafeMutableRawPointer, MTContactCallbackFunc) -> Void
         let MTRegisterContactFrameCallbackTyped = unsafeBitCast(MTRegisterContactFrameCallbackPtr, to: MTRegisterCallbackFuncTyped.self)
-        
-        for (index, device) in devices.enumerated() {
-            print("🔧 [PinchGestureDetector] 正在启动设备 #\(index)...")
+
+        for device in devices {
             MTRegisterContactFrameCallbackTyped(device, globalPinchCallback)
             MTDeviceStart(device, 0)
         }
-        
+
         isMonitoring = true
-        print("✅ [PinchGestureDetector] 监听已启动！触控板手势检测已就绪")
     }
     
     // MARK: - 停止监听
@@ -180,7 +168,6 @@ class PinchGestureDetector {
         
         deviceList.removeAll()
         isMonitoring = false
-        print("⏹️ [PinchGestureDetector] 监听已停止")
     }
     
     // MARK: - 核心处理逻辑
@@ -367,7 +354,6 @@ class PinchGestureDetector {
             previousY = avgY
             gestureStartTime = Date()
             didEnterCloseWindowHint = false
-            print("✋ [Gesture] 手势开始 - 初始距离: \(String(format: "%.4f", distance)), Y: \(String(format: "%.3f", avgY))")
 
             // 发送手势开始反馈
             emitFeedback(
@@ -385,20 +371,8 @@ class PinchGestureDetector {
             let yDelta = avgY - gestureStartY  // 正值=向上，负值=向下
             let currentScale = gestureStartDistance > 0 ? distance / gestureStartDistance : 1.0
             
-            // 只有变化足够大才打印（防抖动）
+            // 只有变化足够大才触发回调（防抖动）
             if abs(distanceDelta) > 0.002 || abs(avgY - previousY) > 0.01 {
-                if distanceDelta > 0.005 {
-                    print("👐 [Gesture] 张开中 scale=\(String(format: "%.2f", currentScale))")
-                } else if distanceDelta < -0.005 {
-                    print("🤏 [Gesture] 捏合中 scale=\(String(format: "%.2f", currentScale))")
-                }
-                
-                if yDelta < -0.02 {
-                    print("👇 [Gesture] 下滑中 deltaY=\(String(format: "%.3f", yDelta))")
-                } else if yDelta > 0.02 {
-                    print("👆 [Gesture] 上滑中 deltaY=\(String(format: "%.3f", yDelta))")
-                }
-                
                 onPinchChanged?(CGFloat(currentScale))
             }
 
@@ -425,21 +399,16 @@ class PinchGestureDetector {
         let totalYDelta = previousY - gestureStartY  // 正值=向上，负值=向下
         let gestureDuration = gestureStartTime.map { Date().timeIntervalSince($0) } ?? 0
 
-        print("✅ [Gesture] 手势结束 - scale: \(String(format: "%.2f", finalScale)), yDelta: \(String(format: "%.3f", totalYDelta)), duration: \(String(format: "%.2f", gestureDuration))s")
-
         // === 主导手势类型判断 ===
         // 计算各维度的绝对变化量
         let absYDelta = abs(totalYDelta)
         let scaleDeviation = abs(finalScale - 1.0)  // 偏离1.0的程度
-        
+
         // 判断主导手势类型：
         // 1. 滑动主导：Y轴变化明显 且 是scale变化的2倍以上
         // 2. 捏合主导：scale变化明显 且 不是滑动主导
         let isSwipeGestureDominant = absYDelta > yDeltaThreshold && absYDelta > (scaleDeviation * 2)
         let isPinchGestureDominant = scaleDeviation > scaleDeviationThreshold && !isSwipeGestureDominant
-        
-        print("📊 [Analysis] Y变化: \(String(format: "%.3f", absYDelta)), Scale偏离: \(String(format: "%.3f", scaleDeviation))")
-        print("📊 [Analysis] 滑动主导: \(isSwipeGestureDominant), 捏合主导: \(isPinchGestureDominant)")
 
         // === 发送手势结束反馈（处理"已取消"场景）===
         let mouseLocation = NSEvent.mouseLocation
@@ -486,7 +455,6 @@ class PinchGestureDetector {
         // 2. 不会执行关闭窗口
         // 3. 不会执行其他任何动作（避免覆盖正常动作的结束反馈）
         if didEnterCloseWindowHint && !willCloseWindow && !willExecuteOtherAction {
-            print("🚫 [Feedback] 关闭窗口操作已取消")
             emitFeedback(
                 phase: .ended,
                 scale: CGFloat(finalScale),
@@ -513,27 +481,21 @@ class PinchGestureDetector {
         if isSwipeGestureDominant {
             // 滑动手势优先
             if totalYDelta < -swipeDownThreshold {
-                print("🎯 [Action] 双指下滑 -> 最小化窗口")
                 onGestureDetected?(.swipeDown)
                 executeWindowAction(.swipeDown, gestureDuration: gestureDuration)
             } else if totalYDelta > swipeUpThreshold {
-                print("🎯 [Action] 双指上滑 -> 检查是否可恢复窗口")
                 onGestureDetected?(.swipeUp)
                 executeWindowAction(.swipeUp, gestureDuration: gestureDuration)
             }
         } else if isPinchGestureDominant {
             // 捏合手势
             if finalScale > pinchOpenThreshold {
-                print("🎯 [Action] 双指张开 -> 全屏窗口")
                 onGestureDetected?(.pinchOpen)
                 executeWindowAction(.pinchOpen, gestureDuration: gestureDuration)
             } else if finalScale < pinchCloseThreshold {
-                print("🎯 [Action] 双指捏合")
                 onGestureDetected?(.pinchClose)
                 executeWindowAction(.pinchClose, gestureDuration: gestureDuration)
             }
-        } else {
-            print("⚠️ [Analysis] 手势幅度不足，不触发动作")
         }
 
         onPinchEnded?(CGFloat(finalScale))
@@ -564,7 +526,6 @@ class PinchGestureDetector {
             if gestureDuration >= nonFullScreenSwipeUpCloseThreshold,
                let (window, _) = WindowManager.shared.getWindowUnderMouse(mouseLocation),
                !WindowManager.shared.isWindowFullScreen(window) {
-                print("❌ [Action] 非全屏 + 长上滑(\(String(format: "%.1f", gestureDuration))s >= \(nonFullScreenSwipeUpCloseThreshold)s)，关闭窗口")
                 WindowManager.shared.closeWindow(window)
                 return
             }
@@ -573,13 +534,11 @@ class PinchGestureDetector {
             if let distance = distanceFromLastMinimizedLocation(mouseLocation),
                distance <= restoreProximityThreshold,
                let record = lastMinimizedWindow {
-                print("✅ [Action] 在原位置附近上滑，恢复窗口 (距离: \(String(format: "%.0f", distance))px)")
                 WindowManager.shared.unminimizeWindow(record.windowElement)
                 lastMinimizedWindow = nil  // 清除记录
                 return
             }
 
-            print("ℹ️ [Action] 上滑但不满足关闭/恢复条件")
             return
 
         default:
@@ -588,7 +547,6 @@ class PinchGestureDetector {
 
         // 其他手势需要获取当前窗口
         guard let (window, _) = WindowManager.shared.getWindowUnderMouse(mouseLocation) else {
-            print("⚠️ [Action] 无法获取当前窗口")
             return
         }
 
@@ -599,15 +557,20 @@ class PinchGestureDetector {
 
         case .pinchClose:
             // 双指捏合：
-            // - 全屏状态：退出全屏
+            // - Chrome：直接发送键盘快捷键（演示模式全屏检测不可靠）
+            // - 其他应用全屏状态：退出全屏
             // - 非全屏：无动作
-            let isFullScreen = WindowManager.shared.isWindowFullScreen(window)
-            print("🔍 [Action] pinchClose: isFullScreen=\(isFullScreen)")
-            if isFullScreen {
-                print("🔄 [Action] 全屏状态，退出全屏")
+            let bundleId = WindowManager.shared.getAppBundleIdentifier(for: window)
+            let isChromeWindow = bundleId == "com.google.Chrome" || bundleId == "com.google.Chrome.canary"
+
+            if isChromeWindow {
+                // Chrome 特殊处理：直接调用 restoreWindow，不检测全屏状态
                 WindowManager.shared.restoreWindow(window)
             } else {
-                print("ℹ️ [Action] 非全屏状态，捏合无动作")
+                let isFullScreen = WindowManager.shared.isWindowFullScreen(window)
+                if isFullScreen {
+                    WindowManager.shared.restoreWindow(window)
+                }
             }
 
         case .swipeDown:
@@ -617,7 +580,6 @@ class PinchGestureDetector {
                 location: mouseLocation,
                 timestamp: Date()
             )
-            print("📌 [Action] 记录最小化位置: (\(String(format: "%.0f", mouseLocation.x)), \(String(format: "%.0f", mouseLocation.y)))")
             WindowManager.shared.minimizeWindow(window)
 
         case .swipeUp:

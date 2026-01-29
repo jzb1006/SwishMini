@@ -15,25 +15,26 @@ import Cocoa
 /// 运行时动态加载，失败则回退到公开 API
 private var _AXUIElementGetWindowFunc: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError)? = {
     guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow") else {
-        print("⚠️ [WindowManager] 私有 API _AXUIElementGetWindow 不可用，将使用公开 API 回退")
         return nil
     }
     return unsafeBitCast(symbol, to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self)
 }()
 
 class WindowManager {
-    
+
     static let shared = WindowManager()
-    
+
+    /// 最小有效窗口尺寸（过滤 Chrome 全屏工具栏等小窗口）
+    private let minWindowSize: CGFloat = 100
+
     private init() {}
     
     // MARK: - 窗口检测
     
     /// 获取鼠标位置下的窗口
     func getWindowUnderMouse(_ mouseLocation: CGPoint) -> (window: AXUIElement, frame: CGRect)? {
-        guard let mainScreen = NSScreen.screens.first else { return nil }
-        let mainScreenHeight = mainScreen.frame.height
-        let screenPoint = CGPoint(x: mouseLocation.x, y: mainScreenHeight - mouseLocation.y)
+        guard let mainDisplayHeight = mainDisplayHeightForAXCoordinates() else { return nil }
+        let screenPoint = cocoaToAX(mouseLocation, mainDisplayHeight: mainDisplayHeight)
 
         // 排除自身进程的窗口（如 HUD 浮层），防止 HUD 干扰窗口检测导致抖动
         let selfPID = getpid()
@@ -60,7 +61,6 @@ class WindowManager {
             )
 
             // 过滤太小的窗口（如 Chrome 全屏时的工具栏，高度只有几十像素）
-            let minWindowSize: CGFloat = 100
             guard windowFrame.width >= minWindowSize && windowFrame.height >= minWindowSize else {
                 continue
             }
@@ -80,14 +80,17 @@ class WindowManager {
                     windows.first { getAXWindowID($0) == targetID }
                 }
 
-                // Fallback: focusedWindow > windows.first
-                let fallbackFocused = getFocusedWindow(for: app)
-                let candidateWindow = matchedWindow ?? fallbackFocused ?? windows.first
+                // Chrome 演示模式全屏等场景下，"鼠标下的 CGWindow"可能没有对应的 AXWindow。
+                // 此时用几何/命中测试把 CGWindow 归并到正确的顶层 AXWindow，避免错误回退到 focusedWindow。
+                let geometryMatchedWindow: AXUIElement? = (matchedWindow == nil) ? bestMatchingAXWindow(
+                    windows,
+                    cgWindowFrame: windowFrame,
+                    screenPointAX: screenPoint
+                ) : nil
 
-                if matchedWindow == nil {
-                    let focusedID = fallbackFocused.flatMap { getAXWindowID($0) }
-                    print("⚠️ [WindowManager] AX 窗口映射 fallback (cgWindowID: \(cgWindowNumber.map(String.init) ?? "nil"), focusedAXWindowID: \(focusedID.map(String.init) ?? "nil"), windowCount: \(windows.count))")
-                }
+                // Fallback 优先级：精确匹配 > 几何匹配 > focusedWindow > first
+                let fallbackFocused = getFocusedWindow(for: app)
+                let candidateWindow = matchedWindow ?? geometryMatchedWindow ?? fallbackFocused ?? windows.first
 
                 if let window = candidateWindow, let axFrame = getWindowFrame(window) {
                     return (window, axFrame)
@@ -99,19 +102,31 @@ class WindowManager {
     }
     
     /// 检查鼠标是否在窗口标题栏区域
+    /// - Note: Chrome 全屏检测不可靠，对 Chrome 使用更宽松的判断
     func isPointOnTitleBar(_ point: CGPoint) -> Bool {
-        guard let mainScreen = NSScreen.screens.first else { return false }
-        let screenHeight = mainScreen.frame.height
+        guard let mainDisplayHeight = mainDisplayHeightForAXCoordinates() else { return false }
 
         // 单次查询窗口信息，确保结果一致性
         let windowInfo = getWindowUnderMouse(point)
 
-        // 全屏检测：鼠标在屏幕顶部边缘（用于触发全屏标题栏）
-        let screenTopEdge: CGFloat = 6  // 顶部 6 像素触发区域
-        if point.y >= screenHeight - screenTopEdge {
-            // 检查当前窗口是否全屏
-            if let window = windowInfo?.window, isWindowFullScreen(window) {
+        // Chrome 特殊处理：演示模式全屏时，整个窗口区域都可以触发手势
+        // 因为 Chrome 全屏时没有标准标题栏，但用户期望在任意位置捏合都能退出全屏
+        if let window = windowInfo?.window, isChrome(window) {
+            if isWindowVisuallyFullScreen(window) {
                 return true
+            }
+        }
+
+        // 全屏检测：鼠标在屏幕顶部边缘（用于触发全屏标题栏）
+        // 使用鼠标所在屏幕的顶部，而非固定使用主屏幕高度
+        let screenTopEdge: CGFloat = 6  // 顶部 6 像素触发区域
+        let screenUnderPoint = NSScreen.screens.first { $0.frame.contains(point) }
+        let topY = (screenUnderPoint?.frame.maxY ?? mainDisplayHeight) - screenTopEdge
+        if point.y >= topY {
+            if let window = windowInfo?.window {
+                if isWindowFullScreen(window) {
+                    return true
+                }
             }
         }
 
@@ -120,7 +135,7 @@ class WindowManager {
             return false
         }
 
-        let screenPoint = CGPoint(x: point.x, y: screenHeight - point.y)
+        let screenPoint = cocoaToAX(point, mainDisplayHeight: mainDisplayHeight)
 
         let titleBarHeight: CGFloat = 30.0
         let titleBarRect = CGRect(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: titleBarHeight)
@@ -156,18 +171,12 @@ class WindowManager {
             return false
         }
 
-        guard let mainScreen = NSScreen.screens.first else {
+        guard let mainDisplayHeight = mainDisplayHeightForAXCoordinates() else {
             return false
         }
-        let mainScreenHeight = mainScreen.frame.height
 
         // 将 AX 坐标系（左上角原点）转换为 Cocoa 坐标系（左下角原点）
-        let windowFrameCocoa = CGRect(
-            x: windowFrame.origin.x,
-            y: mainScreenHeight - windowFrame.origin.y - windowFrame.height,
-            width: windowFrame.width,
-            height: windowFrame.height
-        )
+        let windowFrameCocoa = axToCocoa(windowFrame, mainDisplayHeight: mainDisplayHeight)
 
         // 选取与窗口交集面积最大的屏幕（比 center-contains 更稳健，避免边缘漂移误判）
         let bestScreen = NSScreen.screens.max { intersectionArea(windowFrameCocoa, $0.frame) < intersectionArea(windowFrameCocoa, $1.frame) }
@@ -179,21 +188,46 @@ class WindowManager {
 
         // Chrome 演示模式全屏特征：窗口覆盖整个屏幕（包括菜单栏）
         // 使用比例容差 + 最小容差，兼容不同显示器/缩放/刘海安全区
+        // 同时匹配 screenFrame 和 safeAreaFrame，避免刘海屏误判
         let minTolerance: CGFloat = 10.0
         let relativeTolerance: CGFloat = 0.01
 
-        let tolX = max(minTolerance, screenFrame.width * relativeTolerance)
-        let tolY = max(minTolerance, screenFrame.height * relativeTolerance)
+        // 计算 safe area frame（去掉刘海/菜单栏等系统区域）
+        let safeInsets = screen.safeAreaInsets
+        let safeAreaFrame = CGRect(
+            x: screenFrame.origin.x + safeInsets.left,
+            y: screenFrame.origin.y + safeInsets.bottom,
+            width: max(0, screenFrame.width - safeInsets.left - safeInsets.right),
+            height: max(0, screenFrame.height - safeInsets.top - safeInsets.bottom)
+        )
 
-        let dx = abs(windowFrameCocoa.origin.x - screenFrame.origin.x)
-        let dy = abs(windowFrameCocoa.origin.y - screenFrame.origin.y)
-        let dw = abs(windowFrameCocoa.width - screenFrame.width)
-        let dh = abs(windowFrameCocoa.height - screenFrame.height)
+        /// 评估窗口与参考 frame 的匹配程度
+        func evalMatch(_ reference: CGRect, heightTolerance: CGFloat? = nil) -> (matches: Bool, dx: CGFloat, dy: CGFloat, dw: CGFloat, dh: CGFloat, tolX: CGFloat, tolY: CGFloat) {
+            let tolX = max(minTolerance, reference.width * relativeTolerance)
+            let tolY = heightTolerance ?? max(minTolerance, reference.height * relativeTolerance)
+            let dx = abs(windowFrameCocoa.origin.x - reference.origin.x)
+            let dy = abs(windowFrameCocoa.origin.y - reference.origin.y)
+            let dw = abs(windowFrameCocoa.width - reference.width)
+            let dh = abs(windowFrameCocoa.height - reference.height)
+            let matches = dx <= tolX && dy <= tolY && dw <= tolX && dh <= tolY
+            return (matches, dx, dy, dw, dh, tolX, tolY)
+        }
 
-        let isVisuallyFullScreen = dx <= tolX && dy <= tolY && dw <= tolX && dh <= tolY
+        let screenEval = evalMatch(screenFrame)
+        let safeEval = evalMatch(safeAreaFrame)
 
-        // 打印诊断日志（调试期间保留）
-        print("🔍 [WindowManager] 视觉全屏检测: result=\(isVisuallyFullScreen), window=(\(String(format: "%.0f", windowFrameCocoa.origin.x)),\(String(format: "%.0f", windowFrameCocoa.origin.y)),\(String(format: "%.0f", windowFrameCocoa.width))x\(String(format: "%.0f", windowFrameCocoa.height))), screen=(\(String(format: "%.0f", screenFrame.origin.x)),\(String(format: "%.0f", screenFrame.origin.y)),\(String(format: "%.0f", screenFrame.width))x\(String(format: "%.0f", screenFrame.height))), diff=(x:\(String(format: "%.1f", dx)) y:\(String(format: "%.1f", dy)) w:\(String(format: "%.1f", dw)) h:\(String(format: "%.1f", dh))), tol=\(String(format: "%.1f", tolX))")
+        // 严格匹配：任一匹配即视为全屏（兼容刘海屏和非刘海屏）
+        var isVisuallyFullScreen = screenEval.matches || safeEval.matches
+
+        // Chrome 宽松匹配：宽度完全匹配，高度允许最多 15% 差异（地址栏/标签栏）
+        // 条件：x 坐标匹配、宽度匹配、高度 >= 85% 屏幕高度
+        if !isVisuallyFullScreen && isChrome(window) {
+            let chromeHeightTolerance = screenFrame.height * 0.15  // 允许 15% 高度差异
+            let chromeEval = evalMatch(screenFrame, heightTolerance: chromeHeightTolerance)
+            if chromeEval.dx <= chromeEval.tolX && chromeEval.dw <= chromeEval.tolX && chromeEval.dh <= chromeHeightTolerance {
+                isVisuallyFullScreen = true
+            }
+        }
 
         return isVisuallyFullScreen
     }
@@ -240,6 +274,80 @@ class WindowManager {
         return inter.width * inter.height
     }
 
+    /// 获取主显示器（CGMainDisplayID 对应的 NSScreen）的高度（点），用于 Cocoa<->AX/CG 坐标翻转。
+    /// AX/CGWindowList 坐标系以"主显示器"左上角为原点，y 向下；
+    /// Cocoa/NSScreen 坐标系以左下角为原点，y 向上。
+    private func mainDisplayHeightForAXCoordinates() -> CGFloat? {
+        let mainDisplayID = CGMainDisplayID()
+        for screen in NSScreen.screens {
+            guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                continue
+            }
+            if CGDirectDisplayID(screenNumber.uint32Value) == mainDisplayID {
+                return screen.frame.height
+            }
+        }
+        // Fallback: 主显示器未找到时，使用 main 或 first
+        return NSScreen.main?.frame.height ?? NSScreen.screens.first?.frame.height
+    }
+
+    /// Cocoa 坐标转 AX 坐标（左下原点 -> 左上原点）
+    private func cocoaToAX(_ point: CGPoint, mainDisplayHeight: CGFloat) -> CGPoint {
+        CGPoint(x: point.x, y: mainDisplayHeight - point.y)
+    }
+
+    /// AX 矩形转 Cocoa 矩形（左上原点 -> 左下原点）
+    private func axToCocoa(_ rect: CGRect, mainDisplayHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: rect.origin.x,
+            y: mainDisplayHeight - rect.origin.y - rect.height,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    /// 当 CGWindowID 无法精确匹配到 AXWindowID 时，使用几何/命中测试选择最可能的顶层 AXWindow。
+    /// Chrome 演示模式全屏等场景下，"鼠标下的 CGWindow"可能没有对应的 AXWindow，
+    /// 此时通过窗口 frame 和鼠标位置的几何关系来归并到正确的 AXWindow。
+    private func bestMatchingAXWindow(
+        _ windows: [AXUIElement],
+        cgWindowFrame: CGRect,
+        screenPointAX: CGPoint
+    ) -> AXUIElement? {
+        // 获取所有有效窗口的 frame
+        let frames: [(window: AXUIElement, frame: CGRect)] = windows.compactMap { w in
+            guard let f = getWindowFrame(w) else { return nil }
+            guard f.width >= minWindowSize && f.height >= minWindowSize else { return nil }
+            return (w, f)
+        }
+        guard !frames.isEmpty else { return nil }
+
+        // 优先选择包含鼠标点的窗口
+        let containing = frames.filter { $0.frame.contains(screenPointAX) }
+        let pool = containing.isEmpty ? frames : containing
+
+        // 在候选池中，选择与 CGWindow frame 交集面积最大的
+        let best = pool.max { a, b in
+            let ia = intersectionArea(a.frame, cgWindowFrame)
+            let ib = intersectionArea(b.frame, cgWindowFrame)
+            if ia != ib { return ia < ib }
+
+            // 交集相同时，倾向面积更接近 CGWindow bounds 的 AX window
+            let areaA = a.frame.width * a.frame.height
+            let areaB = b.frame.width * b.frame.height
+            let areaCG = cgWindowFrame.width * cgWindowFrame.height
+            let da = abs(areaA - areaCG)
+            let db = abs(areaB - areaCG)
+            return da > db
+        }
+
+        // 安全保护：只有当交集面积 > 0 或鼠标点在窗口内时才返回匹配结果
+        // 避免在所有候选窗口都不匹配时返回错误窗口
+        guard let result = best else { return nil }
+        let hasValidMatch = result.frame.contains(screenPointAX) || intersectionArea(result.frame, cgWindowFrame) > 0
+        return hasValidMatch ? result.window : nil
+    }
+
     private func getWindowFrame(_ window: AXUIElement) -> CGRect? {
         var positionValue: AnyObject?
         var sizeValue: AnyObject?
@@ -260,7 +368,7 @@ class WindowManager {
     // MARK: - 应用识别
     
     /// 获取窗口所属应用的 Bundle ID
-    private func getAppBundleIdentifier(for window: AXUIElement) -> String? {
+    func getAppBundleIdentifier(for window: AXUIElement) -> String? {
         var pid: pid_t = 0
         AXUIElementGetPid(window, &pid)
         if let app = NSRunningApplication(processIdentifier: pid) {
@@ -277,7 +385,6 @@ class WindowManager {
     
     /// 使用键盘快捷键切换全屏 (⌘ + Ctrl + F)
     private func toggleFullScreenViaKeyboard() -> Bool {
-        print("⌨️ [WindowManager] 使用键盘快捷键切换全屏")
         let source = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x03, keyDown: true)  // F 键
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x03, keyDown: false)
@@ -302,14 +409,7 @@ class WindowManager {
     /// 取消最小化窗口
     @discardableResult
     func unminimizeWindow(_ window: AXUIElement) -> Bool {
-        let result = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-        if result == .success {
-            print("✅ [WindowManager] 窗口已恢复")
-            return true
-        } else {
-            print("❌ [WindowManager] 恢复窗口失败: \(result)")
-            return false
-        }
+        return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success
     }
     
     /// 关闭窗口
@@ -327,34 +427,28 @@ class WindowManager {
     func toggleFullScreen(_ window: AXUIElement) -> Bool {
         // Chrome 兼容性：优先使用键盘快捷键
         if isChrome(window) {
-            print("🌐 [WindowManager] 检测到 Chrome，使用键盘快捷键切换全屏")
             return toggleFullScreenViaKeyboard()
         }
-        
+
         // 方法1: 直接设置 AXFullScreen 属性（最可靠）
         var fullScreenValue: AnyObject?
         if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreenValue) == .success,
            let isFullScreen = fullScreenValue as? Bool {
             let newValue = !isFullScreen as CFBoolean
-            let result = AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, newValue)
-            if result == .success {
-                print("✅ [WindowManager] 全屏状态切换成功: \(isFullScreen) -> \(!isFullScreen)")
+            if AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, newValue) == .success {
                 return true
             }
         }
-        
+
         // 方法2: 点击全屏按钮
         var fullScreenButton: AnyObject?
         if AXUIElementCopyAttributeValue(window, kAXFullScreenButtonAttribute as CFString, &fullScreenButton) == .success {
-            let result = AXUIElementPerformAction(fullScreenButton as! AXUIElement, kAXPressAction as CFString)
-            if result == .success {
-                print("✅ [WindowManager] 通过全屏按钮切换成功")
+            if AXUIElementPerformAction(fullScreenButton as! AXUIElement, kAXPressAction as CFString) == .success {
                 return true
             }
         }
-        
+
         // 方法3: 回退到键盘快捷键（最后手段）
-        print("⚠️ [WindowManager] 回退到键盘快捷键模拟")
         let source = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x03, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x03, keyDown: false)
@@ -368,16 +462,23 @@ class WindowManager {
         return true
     }
     
-    /// 还原窗口（仅在全屏状态下退出全屏；非全屏不执行，避免触发 Zoom 等副作用）
+    /// 还原窗口（退出全屏或恢复到标准大小）
+    /// - Note: Chrome 演示模式全屏不设置 AXFullScreen 属性，全屏检测不可靠，
+    ///         因此对 Chrome 直接使用键盘快捷键切换，跳过全屏状态检测
     @discardableResult
     func restoreWindow(_ window: AXUIElement) -> Bool {
-        // 仅处理全屏退出：非全屏不执行，避免 Zoom/快捷键误触发全屏等副作用
-        guard isWindowFullScreen(window) else {
-            print("ℹ️ [WindowManager] 当前窗口非全屏，忽略还原请求")
-            return false
+        // Chrome 兼容性：演示模式全屏检测不可靠，直接用键盘快捷键切换
+        if isChrome(window) {
+            return toggleFullScreenViaKeyboard()
         }
 
-        print("🔄 [WindowManager] 退出全屏模式")
-        return toggleFullScreen(window)
+        // 其他应用：通过 AXFullScreen 属性判断是否全屏
+        var fullScreenValue: AnyObject?
+        if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreenValue) == .success,
+           let isFullScreen = fullScreenValue as? Bool, isFullScreen {
+            return toggleFullScreen(window)
+        }
+
+        return false
     }
 }

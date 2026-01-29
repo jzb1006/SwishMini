@@ -45,7 +45,6 @@ class PermissionManager: ObservableObject {
         let accessEnabled = AXIsProcessTrustedWithOptions(options)
         self.wasGrantedAtLaunch = accessEnabled
         self.hasAccessibilityPermission = accessEnabled
-        print("🔐 PermissionManager 初始化，权限状态: \(accessEnabled ? "✅ 已授予" : "❌ 未授予")")
     }
     
     
@@ -68,9 +67,6 @@ class PermissionManager: ObservableObject {
                 let recheckOptions: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: false]
                 let recheckResult = AXIsProcessTrustedWithOptions(recheckOptions)
                 self.hasAccessibilityPermission = recheckResult
-                if recheckResult {
-                    print("✅ 权限检查更新：权限已授予")
-                }
             }
         }
         
@@ -142,7 +138,6 @@ class PermissionManager: ObservableObject {
             // 标记已处理首次授权
             UserDefaults.standard.set(true, forKey: UserDefaultsKey.didHandleFirstAccessibilityGrant)
 
-            print("🎉 首次授权完成，发送退出重启事件")
             self.onFirstTimeGranted.send(())
         }
     }

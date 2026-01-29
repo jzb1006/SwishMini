@@ -17,8 +17,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        print("🚀 SwishMini 正在启动...")
-
         // 订阅首次授权事件，用于触发退出重启流程
         subscribeToFirstTimeGranted()
 
@@ -28,13 +26,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 检查权限并启动
         checkPermissionsAndStart()
     }
-    
+
     // MARK: - 手势识别
-    
+
     private func startGestureRecognition() {
-        print("🎯 启动触控板手势监听...")
         trackpadGestureManager.startMonitoring()
-        print("✨ 手势系统已启动！")
     }
     
     // MARK: - 菜单栏设置
@@ -89,14 +85,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkPermissionsAndStart() {
-        print("🔍 检查权限状态...")
-        print("   辅助功能权限: \(permissionManager.hasAccessibilityPermission ? "✅ 已授予" : "❌ 未授予")")
-        
         if permissionManager.hasAccessibilityPermission {
-            print("✅ 权限验证通过")
             startGestureRecognition()
         } else {
-            print("⚠️ 缺少权限")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.showPermissionAlert()
             }
