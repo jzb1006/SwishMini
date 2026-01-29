@@ -68,7 +68,17 @@ class PinchGestureDetector {
     // 最小化窗口记录（用于上滑恢复）
     private var lastMinimizedWindow: MinimizedWindowRecord?
     private let restoreProximityThreshold: CGFloat = 150  // 恢复位置容差（像素）
-    
+
+    /// 计算当前鼠标位置与最小化记录位置的距离
+    /// - Parameter point: 当前鼠标位置
+    /// - Returns: 距离（像素），若无最小化记录则返回 nil
+    private func distanceFromLastMinimizedLocation(_ point: CGPoint) -> CGFloat? {
+        guard let record = lastMinimizedWindow else { return nil }
+        let dx = point.x - record.location.x
+        let dy = point.y - record.location.y
+        return sqrt(dx * dx + dy * dy)
+    }
+
     private init() {}
     
     // MARK: - 启动监听
@@ -254,16 +264,15 @@ class PinchGestureDetector {
         }
 
         // 修正：如果有可恢复的最小化窗口且鼠标在恢复热点附近，
-        // 上滑应优先显示为"取消最小化"，避免 HUD 错误地显示"关闭窗口"进度环
-        if classified.candidate == .closeWindow, let record = lastMinimizedWindow {
-            let dx = mouseLocation.x - record.location.x
-            let dy = mouseLocation.y - record.location.y
-            let distance = sqrt(dx * dx + dy * dy)
-            if distance <= restoreProximityThreshold {
-                let absY = abs(yDelta)
-                let denom = max(CGFloat(swipeUpThreshold), 0.0001)
-                classified = (.swipeUp, min(absY / denom, 1))
-            }
+        // 且手势持续时间未达到关闭阈值，则上滑应显示为"取消最小化"
+        // 注意：持续时间 >= 1秒时，关闭窗口优先于恢复热点
+        if classified.candidate == .closeWindow,
+           gestureDuration < nonFullScreenSwipeUpCloseThreshold,
+           let distance = distanceFromLastMinimizedLocation(mouseLocation),
+           distance <= restoreProximityThreshold {
+            let absY = abs(yDelta)
+            let denom = max(CGFloat(swipeUpThreshold), 0.0001)
+            classified = (.swipeUp, min(absY / denom, 1))
         }
 
         // 记录：一旦进入"关闭窗口"提示状态
@@ -296,14 +305,11 @@ class PinchGestureDetector {
         }
         
         let mouseLocation = NSEvent.mouseLocation
-        
+
         // 特殊处理：如果有最小化窗口记录，且鼠标在记录位置附近，允许上滑恢复
         // 这样即使原位置被其他窗口占据，也能触发恢复
         let isNearMinimizedLocation: Bool
-        if let record = lastMinimizedWindow {
-            let dx = mouseLocation.x - record.location.x
-            let dy = mouseLocation.y - record.location.y
-            let distance = sqrt(dx*dx + dy*dy)
+        if let distance = distanceFromLastMinimizedLocation(mouseLocation) {
             isNearMinimizedLocation = distance <= restoreProximityThreshold
         } else {
             isNearMinimizedLocation = false
@@ -444,13 +450,18 @@ class PinchGestureDetector {
         // 预判本次手势会执行哪种动作（需要有效窗口才能真正执行）
         let willSwipeDown = hasValidWindow && isSwipeGestureDominant && totalYDelta < -swipeDownThreshold
         // swipeUp 需要有记录的最小化窗口，且在原位置附近才能恢复
+        // 注意：非全屏 + 持续 >= 1秒时，关闭窗口优先于恢复热点，此时不算 willSwipeUp
         let willSwipeUp: Bool = {
-            guard isSwipeGestureDominant && totalYDelta > swipeUpThreshold,
-                  let record = lastMinimizedWindow else { return false }
-            let dx = mouseLocation.x - record.location.x
-            let dy = mouseLocation.y - record.location.y
-            let distance = sqrt(dx*dx + dy*dy)
-            return distance <= restoreProximityThreshold
+            guard isSwipeGestureDominant,
+                  totalYDelta > swipeUpThreshold,
+                  let distance = distanceFromLastMinimizedLocation(mouseLocation),
+                  distance <= restoreProximityThreshold else { return false }
+
+            // 非全屏 + 持续 >= 1秒时，关闭窗口优先于恢复热点
+            if hasValidWindow, !isWindowFullScreen, gestureDuration >= nonFullScreenSwipeUpCloseThreshold {
+                return false
+            }
+            return true
         }()
         let willPinchOpen = hasValidWindow && isPinchGestureDominant && finalScale > pinchOpenThreshold
         let willPinchClose = hasValidWindow && isPinchGestureDominant && finalScale < pinchCloseThreshold
@@ -544,37 +555,31 @@ class PinchGestureDetector {
 
         switch gesture {
         case .swipeUp:
-            // 双指上滑：
-            // 1. 优先恢复最小化窗口（如果有记录且在原位置附近）
-            // 2. 否则，非全屏 + 持续 >= 1 秒：关闭窗口
-            // 3. 全屏时：无动作（或后续扩展为其他功能）
-            if let record = lastMinimizedWindow {
-                // 检查是否在原来的位置附近
-                let dx = mouseLocation.x - record.location.x
-                let dy = mouseLocation.y - record.location.y
-                let distance = sqrt(dx*dx + dy*dy)
+            // 双指上滑优先级规则（解决两窗口场景下的冲突）：
+            // 1. 非全屏 + 持续 >= 1秒：关闭当前窗口（优先于恢复热点）
+            // 2. 否则，命中恢复热点：恢复最近一次最小化的窗口
+            // 3. 全屏时：无动作
 
-                if distance <= restoreProximityThreshold {
-                    print("✅ [Action] 在原位置附近上滑，恢复窗口 (距离: \(String(format: "%.0f", distance))px)")
-                    WindowManager.shared.unminimizeWindow(record.windowElement)
-                    lastMinimizedWindow = nil  // 清除记录
-                    return
-                }
-                print("⚠️ [Action] 上滑位置距离历史位置过远 (\(String(format: "%.0f", distance))px > \(restoreProximityThreshold)px)")
-            }
-
-            // 未触发恢复（可能没有记录，或不在恢复热点），检查是否应该关闭窗口
-            guard let (window, _) = WindowManager.shared.getWindowUnderMouse(mouseLocation) else {
-                print("⚠️ [Action] 无法获取当前窗口")
+            // 优先检查：是否满足关闭窗口条件
+            if gestureDuration >= nonFullScreenSwipeUpCloseThreshold,
+               let (window, _) = WindowManager.shared.getWindowUnderMouse(mouseLocation),
+               !WindowManager.shared.isWindowFullScreen(window) {
+                print("❌ [Action] 非全屏 + 长上滑(\(String(format: "%.1f", gestureDuration))s >= \(nonFullScreenSwipeUpCloseThreshold)s)，关闭窗口")
+                WindowManager.shared.closeWindow(window)
                 return
             }
 
-            if !WindowManager.shared.isWindowFullScreen(window) && gestureDuration >= nonFullScreenSwipeUpCloseThreshold {
-                print("❌ [Action] 非全屏 + 长上滑(\(String(format: "%.1f", gestureDuration))s >= \(nonFullScreenSwipeUpCloseThreshold)s)，关闭窗口")
-                WindowManager.shared.closeWindow(window)
-            } else {
-                print("ℹ️ [Action] 上滑但不满足关闭条件")
+            // 其次检查：是否在恢复热点内
+            if let distance = distanceFromLastMinimizedLocation(mouseLocation),
+               distance <= restoreProximityThreshold,
+               let record = lastMinimizedWindow {
+                print("✅ [Action] 在原位置附近上滑，恢复窗口 (距离: \(String(format: "%.0f", distance))px)")
+                WindowManager.shared.unminimizeWindow(record.windowElement)
+                lastMinimizedWindow = nil  // 清除记录
+                return
             }
+
+            print("ℹ️ [Action] 上滑但不满足关闭/恢复条件")
             return
 
         default:
@@ -596,7 +601,9 @@ class PinchGestureDetector {
             // 双指捏合：
             // - 全屏状态：退出全屏
             // - 非全屏：无动作
-            if WindowManager.shared.isWindowFullScreen(window) {
+            let isFullScreen = WindowManager.shared.isWindowFullScreen(window)
+            print("🔍 [Action] pinchClose: isFullScreen=\(isFullScreen)")
+            if isFullScreen {
                 print("🔄 [Action] 全屏状态，退出全屏")
                 WindowManager.shared.restoreWindow(window)
             } else {

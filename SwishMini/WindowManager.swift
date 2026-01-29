@@ -9,6 +9,18 @@ import Foundation
 import ApplicationServices
 import Cocoa
 
+// MARK: - 私有 API 声明
+
+/// 获取 AXUIElement 对应的 CGWindowID（私有 API，用于精确窗口匹配）
+/// 运行时动态加载，失败则回退到公开 API
+private var _AXUIElementGetWindowFunc: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError)? = {
+    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow") else {
+        print("⚠️ [WindowManager] 私有 API _AXUIElementGetWindow 不可用，将使用公开 API 回退")
+        return nil
+    }
+    return unsafeBitCast(symbol, to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self)
+}()
+
 class WindowManager {
     
     static let shared = WindowManager()
@@ -31,6 +43,7 @@ class WindowManager {
         }
 
         for windowInfo in windowList {
+            let cgWindowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID
             guard let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
                   let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
                   let layer = windowInfo[kCGWindowLayer as String] as? Int,
@@ -38,27 +51,46 @@ class WindowManager {
                   ownerPID != selfPID else {  // 忽略 SwishMini 自身的窗口
                 continue
             }
-            
+
             let windowFrame = CGRect(
                 x: boundsDict["X"] ?? 0,
                 y: boundsDict["Y"] ?? 0,
                 width: boundsDict["Width"] ?? 0,
                 height: boundsDict["Height"] ?? 0
             )
-            
+
+            // 过滤太小的窗口（如 Chrome 全屏时的工具栏，高度只有几十像素）
+            let minWindowSize: CGFloat = 100
+            guard windowFrame.width >= minWindowSize && windowFrame.height >= minWindowSize else {
+                continue
+            }
+
             if windowFrame.contains(screenPoint) {
                 let app = AXUIElementCreateApplication(ownerPID)
-                
+
                 var windowsValue: AnyObject?
                 let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsValue)
-                
+
                 guard result == .success, let windows = windowsValue as? [AXUIElement], !windows.isEmpty else {
                     continue
                 }
-                
-                // 返回第一个窗口
-                if let firstWindow = windows.first, let axFrame = getWindowFrame(firstWindow) {
-                    return (firstWindow, axFrame)
+
+                // 优先用 CGWindowNumber 精确匹配 AXWindow（解决 Chrome 多窗口/全屏场景取错窗口问题）
+                let matchedWindow: AXUIElement? = cgWindowNumber.flatMap { targetID in
+                    windows.first { getAXWindowID($0) == targetID }
+                }
+
+                // Fallback: focusedWindow > windows.first
+                let fallbackFocused = getFocusedWindow(for: app)
+                let candidateWindow = matchedWindow ?? fallbackFocused ?? windows.first
+
+                if matchedWindow == nil {
+                    let focusedID = fallbackFocused.flatMap { getAXWindowID($0) }
+                    print("⚠️ [WindowManager] AX 窗口映射 fallback (cgWindowID: \(cgWindowNumber.map(String.init) ?? "nil"), focusedAXWindowID: \(focusedID.map(String.init) ?? "nil"), windowCount: \(windows.count))")
+                }
+
+                if let window = candidateWindow, let axFrame = getWindowFrame(window) {
+                    return (window, axFrame)
                 }
             }
         }
@@ -118,46 +150,96 @@ class WindowManager {
 
     /// 检查窗口是否"视觉上全屏"（覆盖整个屏幕，包括菜单栏区域）
     /// - Note: 用于检测 Chrome 等不设置 AXFullScreen 属性的应用
+    /// - Important: AX API 使用左上角坐标系，NSScreen 使用左下角坐标系，需要转换
     private func isWindowVisuallyFullScreen(_ window: AXUIElement) -> Bool {
         guard let windowFrame = getWindowFrame(window) else {
             return false
         }
 
-        // 找到窗口所在的屏幕（而非主屏幕）
-        let windowCenter = CGPoint(
-            x: windowFrame.origin.x + windowFrame.width / 2,
-            y: windowFrame.origin.y + windowFrame.height / 2
+        guard let mainScreen = NSScreen.screens.first else {
+            return false
+        }
+        let mainScreenHeight = mainScreen.frame.height
+
+        // 将 AX 坐标系（左上角原点）转换为 Cocoa 坐标系（左下角原点）
+        let windowFrameCocoa = CGRect(
+            x: windowFrame.origin.x,
+            y: mainScreenHeight - windowFrame.origin.y - windowFrame.height,
+            width: windowFrame.width,
+            height: windowFrame.height
         )
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(windowCenter) }) ?? NSScreen.main else {
+
+        // 选取与窗口交集面积最大的屏幕（比 center-contains 更稳健，避免边缘漂移误判）
+        let bestScreen = NSScreen.screens.max { intersectionArea(windowFrameCocoa, $0.frame) < intersectionArea(windowFrameCocoa, $1.frame) }
+        guard let screen = bestScreen ?? NSScreen.main else {
             return false
         }
 
         let screenFrame = screen.frame
 
-        // 严格的全屏检测：窗口必须覆盖整个屏幕（包括菜单栏）
-        // Chrome 演示模式全屏特征：
-        // 1. 窗口 y 坐标接近 0（屏幕顶部）
-        // 2. 窗口 x 坐标接近屏幕左边界
-        // 3. 窗口宽度等于屏幕宽度
-        // 4. 窗口高度等于屏幕高度（真全屏覆盖菜单栏）
-        let tolerance: CGFloat = 2.0  // 收紧容差，减少误判
+        // Chrome 演示模式全屏特征：窗口覆盖整个屏幕（包括菜单栏）
+        // 使用比例容差 + 最小容差，兼容不同显示器/缩放/刘海安全区
+        let minTolerance: CGFloat = 10.0
+        let relativeTolerance: CGFloat = 0.01
 
-        let isAtScreenOrigin = abs(windowFrame.origin.x - screenFrame.origin.x) <= tolerance &&
-                               abs(windowFrame.origin.y - screenFrame.origin.y) <= tolerance
-        let isFullWidth = abs(windowFrame.width - screenFrame.width) <= tolerance
-        let isFullHeight = abs(windowFrame.height - screenFrame.height) <= tolerance  // 必须覆盖菜单栏
+        let tolX = max(minTolerance, screenFrame.width * relativeTolerance)
+        let tolY = max(minTolerance, screenFrame.height * relativeTolerance)
 
-        let isVisuallyFullScreen = isAtScreenOrigin && isFullWidth && isFullHeight
+        let dx = abs(windowFrameCocoa.origin.x - screenFrame.origin.x)
+        let dy = abs(windowFrameCocoa.origin.y - screenFrame.origin.y)
+        let dw = abs(windowFrameCocoa.width - screenFrame.width)
+        let dh = abs(windowFrameCocoa.height - screenFrame.height)
 
-        if isVisuallyFullScreen {
-            print("🔍 [WindowManager] Chrome 视觉全屏检测: 窗口覆盖整个屏幕 (screen: \(screenFrame), window: \(windowFrame))")
-        }
+        let isVisuallyFullScreen = dx <= tolX && dy <= tolY && dw <= tolX && dh <= tolY
+
+        // 打印诊断日志（调试期间保留）
+        print("🔍 [WindowManager] 视觉全屏检测: result=\(isVisuallyFullScreen), window=(\(String(format: "%.0f", windowFrameCocoa.origin.x)),\(String(format: "%.0f", windowFrameCocoa.origin.y)),\(String(format: "%.0f", windowFrameCocoa.width))x\(String(format: "%.0f", windowFrameCocoa.height))), screen=(\(String(format: "%.0f", screenFrame.origin.x)),\(String(format: "%.0f", screenFrame.origin.y)),\(String(format: "%.0f", screenFrame.width))x\(String(format: "%.0f", screenFrame.height))), diff=(x:\(String(format: "%.1f", dx)) y:\(String(format: "%.1f", dy)) w:\(String(format: "%.1f", dw)) h:\(String(format: "%.1f", dh))), tol=\(String(format: "%.1f", tolX))")
 
         return isVisuallyFullScreen
     }
 
     // MARK: - 窗口信息
-    
+
+    /// 获取 AXUIElement 的 CGWindowID（用于精确窗口匹配）
+    /// 优先使用私有 API，失败则回退到公开属性
+    private func getAXWindowID(_ window: AXUIElement) -> CGWindowID? {
+        // 方法1：私有 API（更可靠）
+        if let getWindowFunc = _AXUIElementGetWindowFunc {
+            var windowID: CGWindowID = 0
+            if getWindowFunc(window, &windowID) == .success {
+                return windowID
+            }
+        }
+
+        // 方法2：公开属性（回退）
+        var value: AnyObject?
+        if AXUIElementCopyAttributeValue(window, "AXWindowNumber" as CFString, &value) == .success {
+            if let num = value as? NSNumber {
+                return CGWindowID(num.uint32Value)
+            }
+        }
+
+        return nil
+    }
+
+    /// 获取应用的焦点窗口
+    private func getFocusedWindow(for app: AXUIElement) -> AXUIElement? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let result = value else {
+            return nil
+        }
+        // AXUIElement 是 CoreFoundation 类型，API 成功时必定返回有效值
+        return (result as! AXUIElement)
+    }
+
+    /// 计算两个矩形的交集面积
+    private func intersectionArea(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        let inter = a.intersection(b)
+        guard !inter.isNull, !inter.isEmpty else { return 0 }
+        return inter.width * inter.height
+    }
+
     private func getWindowFrame(_ window: AXUIElement) -> CGRect? {
         var positionValue: AnyObject?
         var sizeValue: AnyObject?
