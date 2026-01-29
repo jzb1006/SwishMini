@@ -20,21 +20,9 @@
 
 ## 📺 功能演示
 
-> 💡 **提示**：您可以在此处添加 GIF 动图展示应用效果
->
-> 建议录制以下场景：
-> - 双指张开手势 → 窗口全屏
-> - 双指捏合手势 → 窗口还原（全屏时）
-> - 上滑 1秒 → 关闭窗口（非全屏时，带环形进度条）
-> - 双指下滑手势 → 窗口最小化
-> - 双指上滑手势 → 恢复最小化窗口
-
-**预期效果：**
-- ✅ 流畅的手势识别
-- ✅ 即时的窗口响应
-- ✅ 支持任意应用窗口
-- ✅ Chrome 浏览器特别优化
-- ✅ 实时 HUD 视觉反馈（环形进度条 + 颜色渐变）
+<div align="center">
+  <img src="demo.gif" alt="SwishMini 功能演示" width="600">
+</div>
 
 ---
 
@@ -318,21 +306,9 @@ Made with ❤️ by 江志彬
 
 ## 📺 Demo
 
-> 💡 **Tip**: You can add GIF animations here to showcase the app in action
->
-> Suggested scenarios to record:
-> - Two-finger pinch open → Window goes fullscreen
-> - Two-finger pinch close → Window restores (when fullscreen)
-> - Swipe up 1s → Close window (when not fullscreen, with progress ring)
-> - Two-finger swipe down → Window minimizes
-> - Two-finger swipe up → Restore minimized window
-
-**Expected Effects:**
-- ✅ Smooth gesture recognition
-- ✅ Instant window response
-- ✅ Works with any application window
-- ✅ Special optimization for Chrome browser
-- ✅ Real-time HUD visual feedback (progress ring + color gradient)
+<div align="center">
+  <img src="demo.gif" alt="SwishMini Demo" width="600">
+</div>
 
 ---
 
