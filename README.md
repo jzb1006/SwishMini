@@ -6,7 +6,7 @@
 **Control Any macOS Window with Trackpad Gestures**
 
 [![Version](https://img.shields.io/badge/version-1.1-blue.svg)](https://github.com/jzb1006/SwishMini/releases/tag/v1.1)
-[![macOS](https://img.shields.io/badge/macOS-26.1%2B-brightgreen.svg)](https://www.apple.com/macos/)
+[![macOS](https://img.shields.io/badge/macOS-15.0%2B-brightgreen.svg)](https://www.apple.com/macos/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Swift](https://img.shields.io/badge/Swift-5.0-orange.svg)](https://swift.org)
 
@@ -136,7 +136,7 @@ SwishMini 为 macOS 带来直观的触控板手势控制，让窗口管理更加
 
 | 项目 | 要求 |
 |------|------|
-| **操作系统** | macOS 26.1 或更高版本 |
+| **操作系统** | macOS 15.0 或更高版本 |
 | **设备** | 配备触控板的 Mac（内置或外接） |
 | **架构** | Apple Silicon (M1/M2/M3) 或 Intel |
 | **权限** | 辅助功能访问权限 |
@@ -434,7 +434,7 @@ Real-time visual feedback is displayed when performing gestures:
 
 | Item | Requirement |
 |------|-------------|
-| **Operating System** | macOS 26.1 or later |
+| **Operating System** | macOS 15.0 or later |
 | **Device** | Mac with trackpad (built-in or external) |
 | **Architecture** | Apple Silicon (M1/M2/M3) or Intel |
 | **Permissions** | Accessibility access permission |
