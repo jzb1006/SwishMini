@@ -17,8 +17,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 订阅首次授权事件，用于触发退出重启流程
-        subscribeToFirstTimeGranted()
+        // 订阅辅助功能授权事件，授权后静默退出以确保权限生效
+        subscribeToAccessibilityGranted()
 
         // 创建菜单栏图标
         setupMenuBar()
@@ -58,30 +58,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - 权限管理
 
-    /// 订阅首次授权事件，触发退出重启流程
-    private func subscribeToFirstTimeGranted() {
-        permissionManager.onFirstTimeGranted
+    /// 订阅辅助功能授权事件，授权后静默退出以确保权限生效
+    private func subscribeToAccessibilityGranted() {
+        permissionManager.onAccessibilityGranted
             .receive(on: RunLoop.main)
             .sink { [weak self] in
-                guard let self = self else { return }
-                self.showFirstTimeGrantedAlertAndQuit()
+                self?.quit()
             }
             .store(in: &cancellables)
-    }
-
-    /// 显示首次授权成功提示并退出应用
-    private func showFirstTimeGrantedAlertAndQuit() {
-        // 激活应用到前台，确保用户能看到提示
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.messageText = "权限已授予"
-        alert.informativeText = "为确保辅助功能权限完全生效，SwishMini 将退出。\n请重新启动应用以开始使用。"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "退出并重启")
-        _ = alert.runModal()
-
-        quit()
     }
 
     private func checkPermissionsAndStart() {
