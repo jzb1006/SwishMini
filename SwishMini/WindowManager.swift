@@ -106,27 +106,53 @@ class WindowManager {
     func isPointOnTitleBar(_ point: CGPoint) -> Bool {
         guard let mainDisplayHeight = mainDisplayHeightForAXCoordinates() else { return false }
 
-        // 单次查询窗口信息，确保结果一致性
-        let windowInfo = getWindowUnderMouse(point)
-
-        // Chrome 特殊处理：演示模式全屏时，整个窗口区域都可以触发手势
-        // 因为 Chrome 全屏时没有标准标题栏，但用户期望在任意位置捏合都能退出全屏
-        if let window = windowInfo?.window, isChrome(window) {
-            if isWindowVisuallyFullScreen(window) {
-                return true
+        // Chrome 全屏特殊处理：前台应用是 Chrome 且鼠标在屏幕顶部区域
+        // 简化逻辑：不需要等待标签栏滑出，只要在屏幕顶部区域就认为是标题栏
+        if let frontApp = NSWorkspace.shared.frontmostApplication,
+           frontApp.bundleIdentifier == "com.google.Chrome" || frontApp.bundleIdentifier == "com.google.Chrome.canary" {
+            // 检查是否有 Chrome 全屏窗口
+            if hasChromeFullScreenWindow() {
+                // 找到鼠标所在的屏幕（允许 y 超出顶部）
+                if let screen = screenForPointAllowingOverflow(point) {
+                    // 计算鼠标距离屏幕顶部的距离
+                    let distanceFromScreenTop = screen.frame.maxY - point.y
+                    // 允许 -50（标签栏覆盖区域）到 150（屏幕顶部区域）的范围
+                    // 这样无论标签栏是否滑出，都能在顶部区域触发手势
+                    if distanceFromScreenTop >= -50 && distanceFromScreenTop <= 150 {
+                        return true
+                    }
+                }
             }
         }
 
-        // 全屏检测：鼠标在屏幕顶部边缘（用于触发全屏标题栏）
-        // 使用鼠标所在屏幕的顶部，而非固定使用主屏幕高度
-        let screenTopEdge: CGFloat = 6  // 顶部 6 像素触发区域
-        let screenUnderPoint = NSScreen.screens.first { $0.frame.contains(point) }
-        let topY = (screenUnderPoint?.frame.maxY ?? mainDisplayHeight) - screenTopEdge
-        if point.y >= topY {
-            if let window = windowInfo?.window {
-                if isWindowFullScreen(window) {
-                    return true
-                }
+        // 单次查询窗口信息，确保结果一致性
+        let windowInfo = getWindowUnderMouse(point)
+
+        guard let window = windowInfo?.window else {
+            return false
+        }
+
+        let isChromeBrowser = isChrome(window)
+
+        // Chrome 全屏时：使用 Cocoa 坐标系直接检查鼠标距离屏幕顶部的距离
+        // 同样使用宽松屏幕查找，避免菜单栏/标签栏覆盖区域的坐标溢出问题
+        if isChromeBrowser && isWindowFullScreen(window) {
+            let screen = screenForPointAllowingOverflow(point)
+            guard let screen = screen else { return false }
+
+            let distanceFromScreenTop = screen.frame.maxY - point.y
+            // 允许 -50（菜单栏上方）到 100（标签栏+地址栏）的范围
+            return distanceFromScreenTop >= -50 && distanceFromScreenTop <= 100
+        }
+
+        // 其他应用全屏时：使用屏幕顶部检测
+        if isWindowFullScreen(window) {
+            let screenUnderPoint = NSScreen.screens.first { $0.frame.contains(point) }
+            let screenMaxY = screenUnderPoint?.frame.maxY ?? mainDisplayHeight
+            let fullScreenTopEdge: CGFloat = 6
+            let topY = screenMaxY - fullScreenTopEdge
+            if point.y >= topY {
+                return true
             }
         }
 
@@ -141,6 +167,104 @@ class WindowManager {
         let titleBarRect = CGRect(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: titleBarHeight)
 
         return titleBarRect.contains(screenPoint)
+    }
+
+    /// 检查 Chrome 是否在指定屏幕上有全屏窗口
+    private func isChromeFullScreenOnScreen(_ screen: NSScreen) -> Bool {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+
+        let screenFrame = screen.frame
+        guard let mainDisplayHeight = mainDisplayHeightForAXCoordinates() else { return false }
+
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] else {
+                continue
+            }
+
+            // 检查是否是 Chrome
+            guard let app = NSRunningApplication(processIdentifier: ownerPID),
+                  app.bundleIdentifier == "com.google.Chrome" || app.bundleIdentifier == "com.google.Chrome.canary" else {
+                continue
+            }
+
+            let windowFrameAX = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+
+            // 转换为 Cocoa 坐标
+            let windowFrameCocoa = axToCocoa(windowFrameAX, mainDisplayHeight: mainDisplayHeight)
+
+            // 检查窗口是否覆盖此屏幕的大部分区域（宽度匹配 + 高度 >= 85%）
+            let widthMatches = abs(windowFrameCocoa.width - screenFrame.width) <= 10
+            let heightRatio = windowFrameCocoa.height / screenFrame.height
+            let heightMatches = heightRatio >= 0.85
+            let topNearScreen = (screenFrame.maxY - windowFrameCocoa.maxY) <= 10
+
+            if widthMatches && heightMatches && topNearScreen {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// 快速检查 Chrome 是否有任何全屏窗口（不限定屏幕）
+    /// - Note: 用于在检测标题栏区域时快速判断，避免重复遍历
+    private func hasChromeFullScreenWindow() -> Bool {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+
+        guard let mainDisplayHeight = mainDisplayHeightForAXCoordinates() else { return false }
+
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] else {
+                continue
+            }
+
+            // 检查是否是 Chrome
+            guard let app = NSRunningApplication(processIdentifier: ownerPID),
+                  app.bundleIdentifier == "com.google.Chrome" || app.bundleIdentifier == "com.google.Chrome.canary" else {
+                continue
+            }
+
+            let windowFrameAX = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+
+            // 转换为 Cocoa 坐标
+            let windowFrameCocoa = axToCocoa(windowFrameAX, mainDisplayHeight: mainDisplayHeight)
+
+            // 找到窗口所在的屏幕
+            guard let screen = NSScreen.screens.first(where: {
+                $0.frame.intersects(windowFrameCocoa)
+            }) else {
+                continue
+            }
+
+            let screenFrame = screen.frame
+
+            // 检查窗口是否覆盖屏幕的大部分区域
+            let widthMatches = abs(windowFrameCocoa.width - screenFrame.width) <= 10
+            let heightRatio = windowFrameCocoa.height / screenFrame.height
+            let heightMatches = heightRatio >= 0.85
+
+            if widthMatches && heightMatches {
+                return true
+            }
+        }
+
+        return false
     }
 
     /// 检查窗口是否处于全屏状态
@@ -167,7 +291,7 @@ class WindowManager {
     /// - Note: 用于检测 Chrome 等不设置 AXFullScreen 属性的应用
     /// - Important: AX API 使用左上角坐标系，NSScreen 使用左下角坐标系，需要转换
     private func isWindowVisuallyFullScreen(_ window: AXUIElement) -> Bool {
-        guard let windowFrame = getWindowFrame(window) else {
+        guard let axWindowFrame = getWindowFrame(window) else {
             return false
         }
 
@@ -175,8 +299,20 @@ class WindowManager {
             return false
         }
 
+        // Chrome 演示模式全屏下，AXPosition/AXSize 可能不反映"视觉上的"窗口 bounds。
+        // 优先使用 CGWindowList 的 bounds（通过 CGWindowID 精确定位），失败再回退到 AX frame。
+        let effectiveWindowFrameAX: CGRect = {
+            guard let windowID = getAXWindowID(window),
+                  let cgFrame = getCGWindowFrame(windowID),
+                  cgFrame.width >= minWindowSize,
+                  cgFrame.height >= minWindowSize else {
+                return axWindowFrame
+            }
+            return cgFrame
+        }()
+
         // 将 AX 坐标系（左上角原点）转换为 Cocoa 坐标系（左下角原点）
-        let windowFrameCocoa = axToCocoa(windowFrame, mainDisplayHeight: mainDisplayHeight)
+        let windowFrameCocoa = axToCocoa(effectiveWindowFrameAX, mainDisplayHeight: mainDisplayHeight)
 
         // 选取与窗口交集面积最大的屏幕（比 center-contains 更稳健，避免边缘漂移误判）
         let bestScreen = NSScreen.screens.max { intersectionArea(windowFrameCocoa, $0.frame) < intersectionArea(windowFrameCocoa, $1.frame) }
@@ -219,12 +355,18 @@ class WindowManager {
         // 严格匹配：任一匹配即视为全屏（兼容刘海屏和非刘海屏）
         var isVisuallyFullScreen = screenEval.matches || safeEval.matches
 
-        // Chrome 宽松匹配：宽度完全匹配，高度允许最多 15% 差异（地址栏/标签栏）
-        // 条件：x 坐标匹配、宽度匹配、高度 >= 85% 屏幕高度
+        // Chrome 宽松匹配：简化判断，只检查窗口尺寸是否接近屏幕尺寸
+        // 条件：宽度完全匹配 + 高度 >= 屏幕高度的 85%
+        // 这样可以同时兼容刘海屏和普通屏幕
         if !isVisuallyFullScreen && isChrome(window) {
-            let chromeHeightTolerance = screenFrame.height * 0.15  // 允许 15% 高度差异
-            let chromeEval = evalMatch(screenFrame, heightTolerance: chromeHeightTolerance)
-            if chromeEval.dx <= chromeEval.tolX && chromeEval.dw <= chromeEval.tolX && chromeEval.dh <= chromeHeightTolerance {
+            let widthMatches = abs(windowFrameCocoa.width - screenFrame.width) <= minTolerance
+            let heightRatio = windowFrameCocoa.height / screenFrame.height
+            let heightMatches = heightRatio >= 0.85
+
+            // 额外检查：窗口顶部接近屏幕顶部（防止下移的窗口被误判）
+            let topNearScreen = (screenFrame.maxY - windowFrameCocoa.maxY) <= minTolerance
+
+            if widthMatches && heightMatches && topNearScreen {
                 isVisuallyFullScreen = true
             }
         }
@@ -254,6 +396,23 @@ class WindowManager {
         }
 
         return nil
+    }
+
+    /// 获取 CGWindowID 对应的窗口 frame（CGWindowList 坐标系：主屏左上角原点，y 向下）
+    /// - Note: 用于获取更准确的窗口 bounds，Chrome 演示模式全屏时 AX API 可能返回不准确的值
+    private func getCGWindowFrame(_ windowID: CGWindowID) -> CGRect? {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+              let windowInfo = windowList.first,
+              let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat] else {
+            return nil
+        }
+
+        return CGRect(
+            x: boundsDict["X"] ?? 0,
+            y: boundsDict["Y"] ?? 0,
+            width: boundsDict["Width"] ?? 0,
+            height: boundsDict["Height"] ?? 0
+        )
     }
 
     /// 获取应用的焦点窗口
@@ -289,6 +448,22 @@ class WindowManager {
         }
         // Fallback: 主显示器未找到时，使用 main 或 first
         return NSScreen.main?.frame.height ?? NSScreen.screens.first?.frame.height
+    }
+
+    /// 根据鼠标位置找到对应的屏幕，允许 y 坐标超出屏幕顶部
+    /// - Note: macOS 全屏时鼠标移到顶部会滑出菜单栏/标签栏，此时 y 可能超出 screen.frame.maxY，
+    ///         因此只检查 x 是否在屏幕水平范围内，y 允许超出顶部一定范围
+    private func screenForPointAllowingOverflow(_ point: CGPoint) -> NSScreen? {
+        // 允许 y 超出屏幕顶部的最大距离（菜单栏+标签栏最多约 50px）
+        let maxOverflow: CGFloat = 50
+
+        return NSScreen.screens.first { screen in
+            let frame = screen.frame
+            // x 必须在屏幕水平范围内
+            guard point.x >= frame.minX && point.x <= frame.maxX else { return false }
+            // y 可以在屏幕范围内，也可以超出顶部（但不能低于屏幕底部）
+            return point.y >= frame.minY && point.y <= frame.maxY + maxOverflow
+        }
     }
 
     /// Cocoa 坐标转 AX 坐标（左下原点 -> 左上原点）
