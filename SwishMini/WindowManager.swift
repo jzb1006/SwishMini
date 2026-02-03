@@ -116,9 +116,9 @@ class WindowManager {
                 if let screen = screenForPointAllowingOverflow(point) {
                     // 计算鼠标距离屏幕顶部的距离
                     let distanceFromScreenTop = screen.frame.maxY - point.y
-                    // 允许 -50（标签栏覆盖区域）到 150（屏幕顶部区域）的范围
-                    // 这样无论标签栏是否滑出，都能在顶部区域触发手势
-                    if distanceFromScreenTop >= -50 && distanceFromScreenTop <= 150 {
+                    // 允许 -50（标签栏覆盖区域）到 30（屏幕顶部区域）的范围
+                    // 缩小检测区域，避免正常浏览网页时误触发手势
+                    if distanceFromScreenTop >= -50 && distanceFromScreenTop <= 30 {
                         return true
                     }
                 }
@@ -141,8 +141,9 @@ class WindowManager {
             guard let screen = screen else { return false }
 
             let distanceFromScreenTop = screen.frame.maxY - point.y
-            // 允许 -50（菜单栏上方）到 100（标签栏+地址栏）的范围
-            return distanceFromScreenTop >= -50 && distanceFromScreenTop <= 100
+            // 允许 -50（菜单栏上方）到 30（屏幕顶部边缘）的范围
+            // 缩小检测区域，避免正常浏览网页时误触发手势
+            return distanceFromScreenTop >= -50 && distanceFromScreenTop <= 30
         }
 
         // 其他应用全屏时：使用屏幕顶部检测
