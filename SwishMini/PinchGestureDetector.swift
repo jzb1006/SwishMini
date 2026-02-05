@@ -27,7 +27,7 @@ struct MinimizedWindowRecord {
 
 class PinchGestureDetector {
     static let shared = PinchGestureDetector()
-    
+
     // 状态追踪
     private var isMonitoring = false
     private var isGestureActive = false
@@ -49,7 +49,7 @@ class PinchGestureDetector {
     // 框架引用
     private var frameworkHandle: UnsafeMutableRawPointer?
     private var deviceList: [UnsafeMutableRawPointer] = []
-    
+
     // 回调
     var onGestureDetected: ((TitleBarGestureType) -> Void)?
     var onPinchChanged: ((CGFloat) -> Void)?
@@ -57,13 +57,13 @@ class PinchGestureDetector {
 
     /// 手势反馈回调 - 用于 HUD 显示
     var onGestureFeedback: ((GestureFeedback) -> Void)?
-    
+
     // 手势阈值（增加死区，减少误触发）
     private let pinchOpenThreshold: Float = 1.5      // 张开阈值（从1.4提高）
     private let pinchCloseThreshold: Float = 0.5     // 捏合阈值（从0.6降低）
     private let swipeDownThreshold: Float = 0.18     // 下滑距离阈值（从0.15提高）
     private let swipeUpThreshold: Float = 0.15       // 上滑距离阈值（从0.12提高）
-    
+
     // 主导手势判断阈值
     private let scaleDeviationThreshold: Float = 0.25  // scale变化超过25%才算有效捏合/张开
     private let yDeltaThreshold: Float = 0.10          // Y变化超过10%才算有效滑动
@@ -129,9 +129,9 @@ class PinchGestureDetector {
     }
 
     private init() {}
-    
+
     // MARK: - 启动监听
-    
+
     func startMonitoring() {
         if isMonitoring { return }
 
@@ -200,25 +200,25 @@ class PinchGestureDetector {
 
         isMonitoring = true
     }
-    
+
     // MARK: - 停止监听
-    
+
     func stopMonitoring() {
         guard isMonitoring, let handle = frameworkHandle else { return }
-        
+
         if let stopPtr = dlsym(handle, "MTDeviceStop") {
             typealias MTDeviceStopFunc = @convention(c) (UnsafeMutableRawPointer) -> Void
             let MTDeviceStop = unsafeBitCast(stopPtr, to: MTDeviceStopFunc.self)
-            
+
             for device in deviceList {
                 MTDeviceStop(device)
             }
         }
-        
+
         deviceList.removeAll()
         isMonitoring = false
     }
-    
+
     // MARK: - 核心处理逻辑
 
     /// 分类手势类型并计算进度
@@ -339,7 +339,7 @@ class PinchGestureDetector {
             }
             return
         }
-        
+
         let mouseLocation = NSEvent.mouseLocation
 
         // 特殊处理：如果有最小化窗口记录，且鼠标在记录位置附近，允许上滑恢复
@@ -350,17 +350,17 @@ class PinchGestureDetector {
         } else {
             isNearMinimizedLocation = false
         }
-        
+
         // 检查是否在标题栏区域
         let isOnTitleBar = WindowManager.shared.isPointOnTitleBar(mouseLocation)
         let isInValidRegionForFeedback = isOnTitleBar || isNearMinimizedLocation
-        
+
         // 如果不在标题栏，且也不在最小化恢复位置附近，则忽略手势
         if !isOnTitleBar && !isNearMinimizedLocation {
             if isGestureActive { endGesture() }
             return
         }
-        
+
         // 筛选有效手指（state > 0 表示手指在触控板上）
         var activePoints: [(id: Int, x: Float, y: Float)] = []
 
@@ -375,9 +375,9 @@ class PinchGestureDetector {
                 activePoints.append((id: Int(t.identifier), x: x, y: y))
             }
         }
-        
+
         // 必须至少两个手指
-        guard activePoints.count >= 2 else {
+        guard activePoints.count == 2 else {
             if isGestureActive { endGesture() }
             return
         }
@@ -414,10 +414,10 @@ class PinchGestureDetector {
         let dx = p2.x - p1.x
         let dy = p2.y - p1.y
         let distance = sqrt(dx*dx + dy*dy)
-        
+
         // 计算两指的平均 Y 坐标（用于下滑检测）
         let avgY = (p1.y + p2.y) / 2.0
-        
+
         // 如果是首次识别
         if !isGestureActive {
             // 距离范围已在 findClosestValidPair 中过滤，此处无需重复检查
@@ -446,7 +446,7 @@ class PinchGestureDetector {
             let distanceDelta = distance - previousDistance
             let yDelta = avgY - gestureStartY  // 正值=向上，负值=向下
             let currentScale = gestureStartDistance > 0 ? distance / gestureStartDistance : 1.0
-            
+
             // 只有变化足够大才触发回调（防抖动）
             if abs(distanceDelta) > 0.002 || abs(avgY - previousY) > 0.01 {
                 onPinchChanged?(CGFloat(currentScale))
@@ -467,7 +467,7 @@ class PinchGestureDetector {
             previousY = avgY
         }
     }
-    
+
     private func endGesture() {
         guard isGestureActive else { return }
 
@@ -586,7 +586,7 @@ class PinchGestureDetector {
         gestureStartTime = nil
         didEnterCloseWindowHint = false
     }
-    
+
     // MARK: - 执行窗口操作
 
     private func executeWindowAction(_ gesture: TitleBarGestureType, gestureDuration: TimeInterval = 0) {
