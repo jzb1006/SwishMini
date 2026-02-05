@@ -40,6 +40,9 @@ class PinchGestureDetector {
     private var gestureStartY: Float = 0
     private var previousY: Float = 0
 
+    // ID 锁定机制：手势进行中只追踪锁定的触点对
+    private var lockedIdentifiers: (Int, Int)?
+
     // 非全屏上滑关闭窗口的持续时间阈值（秒）
     private let nonFullScreenSwipeUpCloseThreshold: TimeInterval = 1.0
 
@@ -64,7 +67,11 @@ class PinchGestureDetector {
     // 主导手势判断阈值
     private let scaleDeviationThreshold: Float = 0.25  // scale变化超过25%才算有效捏合/张开
     private let yDeltaThreshold: Float = 0.10          // Y变化超过10%才算有效滑动
-    
+
+    // 手势启动时的触点距离范围（归一化坐标）
+    private let maxStartDistanceNormalized: Float = 0.85  // 距离过大则不启动手势
+    private let minStartDistanceNormalized: Float = 0.05  // 距离过小则不启动手势
+
     // 最小化窗口记录（用于上滑恢复）
     private var lastMinimizedWindow: MinimizedWindowRecord?
     private let restoreProximityThreshold: CGFloat = 150  // 恢复位置容差（像素）
@@ -77,6 +84,48 @@ class PinchGestureDetector {
         let dx = point.x - record.location.x
         let dy = point.y - record.location.y
         return sqrt(dx * dx + dy * dy)
+    }
+
+    /// 从触点列表中选择"距离在有效范围内"的最近一对
+    /// - Parameters:
+    ///   - points: 触点列表（包含 id, x, y）
+    ///   - minDistance: 最小距离（归一化坐标）
+    ///   - maxDistance: 最大距离（归一化坐标）
+    /// - Returns: 最近的有效触点对；若无有效组合（或点数 < 2）则返回 nil
+    private func findClosestValidPair(
+        from points: [(id: Int, x: Float, y: Float)],
+        minDistance: Float,
+        maxDistance: Float
+    ) -> ((id: Int, x: Float, y: Float), (id: Int, x: Float, y: Float))? {
+        guard points.count >= 2 else { return nil }
+
+        // 预计算平方值，避免循环内重复计算
+        let minDistanceSquared = minDistance * minDistance
+        let maxDistanceSquared = maxDistance * maxDistance
+
+        // 遍历所有组合，找出"距离在有效范围内"的最近一对
+        var closestPair: ((id: Int, x: Float, y: Float), (id: Int, x: Float, y: Float))?
+        var minValidDistanceSquared: Float = .greatestFiniteMagnitude
+
+        for i in 0..<points.count {
+            for j in (i + 1)..<points.count {
+                let dx = points[j].x - points[i].x
+                let dy = points[j].y - points[i].y
+                let distSquared = dx * dx + dy * dy
+
+                // 过滤距离不在有效范围内的组合
+                guard distSquared >= minDistanceSquared && distSquared <= maxDistanceSquared else {
+                    continue
+                }
+
+                if distSquared < minValidDistanceSquared {
+                    minValidDistanceSquared = distSquared
+                    closestPair = (points[i], points[j])
+                }
+            }
+        }
+
+        return closestPair
     }
 
     private init() {}
@@ -313,17 +362,17 @@ class PinchGestureDetector {
         }
         
         // 筛选有效手指（state > 0 表示手指在触控板上）
-        var activePoints: [(x: Float, y: Float)] = []
-        
+        var activePoints: [(id: Int, x: Float, y: Float)] = []
+
         for i in 0..<Int(count) {
             let t = touches[i]
             // state: 1=开始, 2=移动中, 等。只要 > 0 就是有效触摸
             // 使用 normalized 的 position
             let x = t.normalized.position.x
             let y = t.normalized.position.y
-            
+
             if t.state > 0 && x >= 0 && x <= 1 && y >= 0 && y <= 1 {
-                activePoints.append((x, y))
+                activePoints.append((id: Int(t.identifier), x: x, y: y))
             }
         }
         
@@ -332,11 +381,35 @@ class PinchGestureDetector {
             if isGestureActive { endGesture() }
             return
         }
-        
-        // 取前两个有效点
-        let p1 = activePoints[0]
-        let p2 = activePoints[1]
-        
+
+        // 选择要追踪的触点对
+        let p1: (id: Int, x: Float, y: Float)
+        let p2: (id: Int, x: Float, y: Float)
+
+        if let locked = lockedIdentifiers {
+            // 手势进行中：追踪已锁定的触点 ID
+            guard let lockedP1 = activePoints.first(where: { $0.id == locked.0 }),
+                  let lockedP2 = activePoints.first(where: { $0.id == locked.1 }) else {
+                // 锁定的触点消失，结束手势
+                endGesture()
+                return
+            }
+            p1 = lockedP1
+            p2 = lockedP2
+        } else {
+            // 新手势：选择距离在有效范围内的最近一对触点
+            guard let pair = findClosestValidPair(
+                from: activePoints,
+                minDistance: minStartDistanceNormalized,
+                maxDistance: maxStartDistanceNormalized
+            ) else {
+                if isGestureActive { endGesture() }
+                return
+            }
+            p1 = pair.0
+            p2 = pair.1
+        }
+
         // 计算两指距离（用于捏合检测）
         let dx = p2.x - p1.x
         let dy = p2.y - p1.y
@@ -347,7 +420,10 @@ class PinchGestureDetector {
         
         // 如果是首次识别
         if !isGestureActive {
+            // 距离范围已在 findClosestValidPair 中过滤，此处无需重复检查
+
             isGestureActive = true
+            lockedIdentifiers = (p1.id, p2.id)  // 锁定触点对 ID
             gestureStartDistance = distance
             previousDistance = distance
             gestureStartY = avgY
@@ -502,6 +578,7 @@ class PinchGestureDetector {
 
         // 重置状态
         isGestureActive = false
+        lockedIdentifiers = nil  // 清除 ID 锁定
         previousDistance = 0
         gestureStartDistance = 0
         gestureStartY = 0
