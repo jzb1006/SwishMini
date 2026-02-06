@@ -20,11 +20,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 订阅辅助功能授权事件，授权后静默退出以确保权限生效
         subscribeToAccessibilityGranted()
 
+        // 监听屏幕配置变化（热插拔、分辨率调整等）
+        setupScreenChangeObserver()
+
         // 创建菜单栏图标
         setupMenuBar()
 
         // 检查权限并启动
         checkPermissionsAndStart()
+    }
+
+    // MARK: - 屏幕配置监听
+
+    /// 监听屏幕配置变化，触发缓存失效和监控重启
+    private func setupScreenChangeObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScreenConfigurationChanged()
+        }
+    }
+
+    /// 处理屏幕配置变化
+    private func handleScreenConfigurationChanged() {
+        // 1. 使屏幕缓存失效
+        WindowManager.shared.invalidateScreenCache()
+
+        // 2. 请求重启监控
+        TrackpadGestureManager.shared.requestRestartMonitoring(reason: .screenConfigurationChanged)
     }
 
     // MARK: - 手势识别

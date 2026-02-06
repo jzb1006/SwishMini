@@ -8,6 +8,53 @@
 
 import Cocoa
 
+// MARK: - 触摸数据深拷贝结构（线程安全）
+
+/// 单个触点的值类型快照，用于从 C 回调安全传递到主线程
+struct TouchPoint {
+    let id: Int
+    let x: Float
+    let y: Float
+    let state: Int32
+}
+
+/// 单帧触摸数据的值类型快照，包含所有有效触点
+struct TouchFrame {
+    let points: [TouchPoint]
+    let timestamp: Double
+
+    /// 从 C 回调的 mtTouch 数组创建深拷贝
+    /// - Parameters:
+    ///   - data: mtTouch 指针（C 回调提供）
+    ///   - count: 触点数量
+    ///   - timestamp: 帧时间戳
+    init(data: UnsafePointer<mtTouch>, count: Int32, timestamp: Double) {
+        var pointArray: [TouchPoint] = []
+        pointArray.reserveCapacity(Int(count))
+
+        for i in 0..<Int(count) {
+            let touch = data[i]
+            pointArray.append(TouchPoint(
+                id: Int(touch.identifier),
+                x: touch.normalized.position.x,
+                y: touch.normalized.position.y,
+                state: touch.state
+            ))
+        }
+
+        self.points = pointArray
+        self.timestamp = timestamp
+    }
+
+    /// 创建空帧（用于手势结束信号）
+    static let empty = TouchFrame(points: [], timestamp: 0)
+
+    private init(points: [TouchPoint], timestamp: Double) {
+        self.points = points
+        self.timestamp = timestamp
+    }
+}
+
 // MARK: - 手势类型
 enum TitleBarGestureType {
     case pinchOpen      // 双指张开 -> 全屏
@@ -132,12 +179,16 @@ class PinchGestureDetector {
 
     // MARK: - 启动监听
 
-    func startMonitoring() {
-        if isMonitoring { return }
+    /// 启动触控板监听（幂等）
+    /// - Returns: 是否成功启动（已启动时返回 true）
+    @discardableResult
+    func startMonitoring() -> Bool {
+        // 幂等性保证：已在监听中直接返回成功
+        if isMonitoring { return true }
 
         // 1. 加载框架
         guard let handle = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_NOW) else {
-            return
+            return false
         }
         frameworkHandle = handle
 
@@ -147,7 +198,9 @@ class PinchGestureDetector {
         let MTDeviceStartPtr = dlsym(handle, "MTDeviceStart")
 
         if MTDeviceCreateListPtr == nil || MTRegisterContactFrameCallbackPtr == nil || MTDeviceStartPtr == nil {
-            return
+            dlclose(handle)
+            frameworkHandle = nil
+            return false
         }
 
         // 3. 定义函数类型并转换
@@ -161,7 +214,9 @@ class PinchGestureDetector {
 
         // 4. 获取设备列表
         guard let devicesRef = MTDeviceCreateList() else {
-             return
+            dlclose(handle)
+            frameworkHandle = nil
+            return false
         }
 
         let count = CFArrayGetCount(devicesRef)
@@ -175,7 +230,9 @@ class PinchGestureDetector {
         }
 
         if devices.isEmpty {
-            return
+            dlclose(handle)
+            frameworkHandle = nil
+            return false
         }
 
         deviceList = devices
@@ -199,14 +256,18 @@ class PinchGestureDetector {
         }
 
         isMonitoring = true
+        return true
     }
 
     // MARK: - 停止监听
 
+    /// 停止触控板监听并释放所有资源（幂等）
     func stopMonitoring() {
-        guard isMonitoring, let handle = frameworkHandle else { return }
+        // 幂等性保证：未在监听中直接返回
+        guard isMonitoring else { return }
 
-        if let stopPtr = dlsym(handle, "MTDeviceStop") {
+        // 1. 停止所有设备
+        if let handle = frameworkHandle, let stopPtr = dlsym(handle, "MTDeviceStop") {
             typealias MTDeviceStopFunc = @convention(c) (UnsafeMutableRawPointer) -> Void
             let MTDeviceStop = unsafeBitCast(stopPtr, to: MTDeviceStopFunc.self)
 
@@ -215,8 +276,31 @@ class PinchGestureDetector {
             }
         }
 
+        // 2. 清理设备列表
         deviceList.removeAll()
+
+        // 3. 关闭框架句柄
+        if let handle = frameworkHandle {
+            dlclose(handle)
+            frameworkHandle = nil
+        }
+
+        // 4. 重置手势状态
+        resetGestureState()
+
         isMonitoring = false
+    }
+
+    /// 重置手势状态（用于停止监听或重启时清理）
+    private func resetGestureState() {
+        isGestureActive = false
+        lockedIdentifiers = nil
+        previousDistance = 0
+        gestureStartDistance = 0
+        gestureStartY = 0
+        previousY = 0
+        gestureStartTime = nil
+        didEnterCloseWindowHint = false
     }
 
     // MARK: - 核心处理逻辑
@@ -331,9 +415,14 @@ class PinchGestureDetector {
         )
     }
 
-    func handleTouchCallback(data: UnsafePointer<mtTouch>?, count: Int32) {
-        // 确保数据有效
-        guard let touches = data, count > 0 else {
+    /// 处理触摸帧数据（主线程）
+    /// - Important: 此方法必须在主线程调用，由 globalPinchCallback 通过 DispatchQueue.main.async 投递
+    /// - Parameter frame: 深拷贝后的触摸帧数据
+    func handleTouchFrame(_ frame: TouchFrame) {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        // 空帧视为手势结束信号
+        guard !frame.points.isEmpty else {
             if isGestureActive {
                 endGesture()
             }
@@ -364,15 +453,14 @@ class PinchGestureDetector {
         // 筛选有效手指（state > 0 表示手指在触控板上）
         var activePoints: [(id: Int, x: Float, y: Float)] = []
 
-        for i in 0..<Int(count) {
-            let t = touches[i]
+        for point in frame.points {
             // state: 1=开始, 2=移动中, 等。只要 > 0 就是有效触摸
-            // 使用 normalized 的 position
-            let x = t.normalized.position.x
-            let y = t.normalized.position.y
+            // 使用 normalized 的 position（已在 TouchFrame 初始化时提取）
+            let x = point.x
+            let y = point.y
 
-            if t.state > 0 && x >= 0 && x <= 1 && y >= 0 && y <= 1 {
-                activePoints.append((id: Int(t.identifier), x: x, y: y))
+            if point.state > 0 && x >= 0 && x <= 1 && y >= 0 && y <= 1 {
+                activePoints.append((id: point.id, x: x, y: y))
             }
         }
 
@@ -468,7 +556,11 @@ class PinchGestureDetector {
         }
     }
 
+    /// 结束当前手势并执行对应动作（主线程）
+    /// - Important: 此方法必须在主线程调用，包含窗口操作和 UI 更新
     private func endGesture() {
+        dispatchPrecondition(condition: .onQueue(.main))
+
         guard isGestureActive else { return }
 
         let finalScale = gestureStartDistance > 0 ? previousDistance / gestureStartDistance : 1.0
@@ -589,7 +681,11 @@ class PinchGestureDetector {
 
     // MARK: - 执行窗口操作
 
+    /// 执行窗口操作（主线程）
+    /// - Important: 此方法必须在主线程调用，所有 WindowManager API 都需要主线程
     private func executeWindowAction(_ gesture: TitleBarGestureType, gestureDuration: TimeInterval = 0) {
+        dispatchPrecondition(condition: .onQueue(.main))
+
         let mouseLocation = NSEvent.mouseLocation
 
         switch gesture {
@@ -667,7 +763,8 @@ class PinchGestureDetector {
 
 // MARK: - 全局 C 回调
 
-// 顶级 C 函数 - 使用 Bridging Header 中定义的 mtTouch 结构体
+/// 顶级 C 函数 - MultitouchSupport 框架回调入口
+/// - Important: 此函数在后台线程调用，必须立即深拷贝数据并投递到主线程
 func globalPinchCallback(
     _ device: UnsafeMutableRawPointer,
     _ data: UnsafePointer<mtTouch>,
@@ -675,5 +772,16 @@ func globalPinchCallback(
     _ timestamp: Double,
     _ frame: Int32
 ) {
-    PinchGestureDetector.shared.handleTouchCallback(data: data, count: nFingers)
+    // 在 C 回调内立即深拷贝触摸数据，避免指针逃逸
+    let touchFrame: TouchFrame
+    if nFingers > 0 {
+        touchFrame = TouchFrame(data: data, count: nFingers, timestamp: timestamp)
+    } else {
+        touchFrame = .empty
+    }
+
+    // 投递到主线程处理，确保所有 UI/窗口操作在主线程执行
+    DispatchQueue.main.async {
+        PinchGestureDetector.shared.handleTouchFrame(touchFrame)
+    }
 }

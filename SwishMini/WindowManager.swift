@@ -24,10 +24,33 @@ class WindowManager {
 
     static let shared = WindowManager()
 
+    // MARK: - 屏幕缓存（线程安全）
+
+    /// 屏幕快照缓存结构，用于减少 NSScreen.screens 调用频率
+    private struct ScreenSnapshot {
+        let mainDisplayHeight: CGFloat
+        let screens: [(displayID: CGDirectDisplayID, frame: CGRect)]
+        let timestamp: Date
+    }
+
+    /// 屏幕缓存（主线程访问）
+    private var screenCache: ScreenSnapshot?
+
+    /// 缓存有效期（秒）
+    private let cacheValidityDuration: TimeInterval = 0.5
+
     /// 最小有效窗口尺寸（过滤 Chrome 全屏工具栏等小窗口）
     private let minWindowSize: CGFloat = 100
 
     private init() {}
+
+    // MARK: - 屏幕缓存管理
+
+    /// 使屏幕缓存失效，下次访问时重新获取
+    /// - Note: 应在屏幕配置变化时调用（如 didChangeScreenParametersNotification）
+    func invalidateScreenCache() {
+        screenCache = nil
+    }
     
     // MARK: - 窗口检测
     
@@ -434,21 +457,63 @@ class WindowManager {
         return inter.width * inter.height
     }
 
-    /// 获取主显示器（CGMainDisplayID 对应的 NSScreen）的高度（点），用于 Cocoa<->AX/CG 坐标翻转。
-    /// AX/CGWindowList 坐标系以"主显示器"左上角为原点，y 向下；
-    /// Cocoa/NSScreen 坐标系以左下角为原点，y 向上。
-    private func mainDisplayHeightForAXCoordinates() -> CGFloat? {
+    // MARK: - 屏幕缓存实现
+
+    /// 刷新屏幕缓存并返回快照
+    /// - Returns: 新的屏幕快照
+    @discardableResult
+    private func refreshScreenCache() -> ScreenSnapshot {
         let mainDisplayID = CGMainDisplayID()
+        var mainHeight: CGFloat = 0
+        var screenList: [(displayID: CGDirectDisplayID, frame: CGRect)] = []
+
         for screen in NSScreen.screens {
             guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
                 continue
             }
-            if CGDirectDisplayID(screenNumber.uint32Value) == mainDisplayID {
-                return screen.frame.height
+            let displayID = CGDirectDisplayID(screenNumber.uint32Value)
+            screenList.append((displayID: displayID, frame: screen.frame))
+
+            if displayID == mainDisplayID {
+                mainHeight = screen.frame.height
             }
         }
+
         // Fallback: 主显示器未找到时，使用 main 或 first
-        return NSScreen.main?.frame.height ?? NSScreen.screens.first?.frame.height
+        if mainHeight == 0 {
+            mainHeight = NSScreen.main?.frame.height ?? NSScreen.screens.first?.frame.height ?? 0
+        }
+
+        let snapshot = ScreenSnapshot(
+            mainDisplayHeight: mainHeight,
+            screens: screenList,
+            timestamp: Date()
+        )
+        screenCache = snapshot
+        return snapshot
+    }
+
+    /// 获取有效的屏幕缓存，过期则自动刷新
+    private func getValidScreenCache() -> ScreenSnapshot {
+        if let cache = screenCache,
+           Date().timeIntervalSince(cache.timestamp) < cacheValidityDuration {
+            return cache
+        }
+        return refreshScreenCache()
+    }
+
+    /// 获取缓存的屏幕列表
+    private func cachedScreens() -> [(displayID: CGDirectDisplayID, frame: CGRect)] {
+        return getValidScreenCache().screens
+    }
+
+    /// 获取主显示器（CGMainDisplayID 对应的 NSScreen）的高度（点），用于 Cocoa<->AX/CG 坐标翻转。
+    /// AX/CGWindowList 坐标系以"主显示器"左上角为原点，y 向下；
+    /// Cocoa/NSScreen 坐标系以左下角为原点，y 向上。
+    /// - Note: 使用缓存减少 NSScreen.screens 调用频率，屏幕配置变化时自动失效
+    private func mainDisplayHeightForAXCoordinates() -> CGFloat? {
+        let cache = getValidScreenCache()
+        return cache.mainDisplayHeight > 0 ? cache.mainDisplayHeight : nil
     }
 
     /// 根据鼠标位置找到对应的屏幕，允许 y 坐标超出屏幕顶部
